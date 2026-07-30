@@ -1,0 +1,6 @@
+# mcp 2.0 renamed mcp.server.fastmcp -> mcp.server.mcpserver; this server uses
+# the FastMCP API, so stay on 1.x until it is ported.
+mcp>=1.10,<2
+pillow>=10.0.0
+qrcode>=7.4
+pydantic>=2.0
