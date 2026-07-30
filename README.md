@@ -49,6 +49,26 @@ instead, up to a 120 mm cap.
 
 Tape narrower than 18 mm drops the second line — there is no room for it.
 
+### Hebrew and other RTL text
+
+Hebrew works, in either field, mixed with Latin or on its own:
+
+```
+print_text_label(text="נקודת מסירת משלוחים")
+```
+
+Two things are handled for you. **Font fallback:** Inter carries no Hebrew glyphs at
+all, so any string containing Hebrew or Arabic switches to the vendored Noto Sans
+Hebrew faces — otherwise you get blank tape, not an error. **Bidi:** Pillow is normally
+built without `libraqm`, so it lays glyphs out left-to-right and will not reorder RTL
+text itself. The server applies the bidi algorithm explicitly and pins the layout
+engine to `BASIC`, so the result is identical whether or not your Pillow has raqm.
+
+Arabic will pick the same fallback font and be reordered correctly, but **contextual
+letterforms are not shaped** — `BASIC` layout does no glyph joining. Hebrew needs no
+joining, so it is unaffected. If you need correct Arabic, install a raqm-enabled
+Pillow, drop the `_shape()` call and the `BASIC` pin, and let raqm do both.
+
 ## Install
 
 ```bash
@@ -82,7 +102,8 @@ docker run -d --name label-printer -p 3000:3000 \
 | `LABEL_TAPE_MM` | `24` | Fallback tape width when the printer is off |
 | `ASSET_PREFIX` | `A-` | Prefix applied by `print_asset_label` |
 | `STORAGE_PREFIX` | `S-` | Prefix applied by `print_storage_label` |
-| `FONT_BOLD` / `FONT_REGULAR` | vendored Inter | Font paths |
+| `FONT_BOLD` / `FONT_REGULAR` | vendored Inter | Latin font paths |
+| `FONT_HEBREW_BOLD` / `FONT_HEBREW_REGULAR` | vendored Noto Sans Hebrew | Used automatically for Hebrew/Arabic text |
 | `MCP_TRANSPORT` | `streamable_http` | Or `stdio` |
 | `MCP_HTTP_HOST` / `MCP_HTTP_PORT` | `0.0.0.0` / `3000` | HTTP bind |
 
@@ -111,5 +132,8 @@ P710BT has been exercised end to end.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Vendored [Inter](https://github.com/rsms/inter) fonts are
-SIL OFL 1.1 (`mcp-server/fonts/OFL.txt`). `ptouch-print` is a separate GPL-3.0 project.
+MIT — see [LICENSE](LICENSE). Vendored fonts are SIL OFL 1.1:
+[Inter](https://github.com/rsms/inter) (`mcp-server/fonts/OFL.txt`) and
+[Noto Sans Hebrew](https://github.com/notofonts/hebrew)
+(`mcp-server/fonts/OFL-NotoSansHebrew.txt`). `ptouch-print` is a separate GPL-3.0
+project.

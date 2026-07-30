@@ -56,6 +56,10 @@ MIN_SUBTEXT_MM = 2.0            # legibility floor for the wrapped name
 FONT_BOLD = os.environ.get("FONT_BOLD", "/app/fonts/Inter-ExtraBold.ttf")
 FONT_REGULAR = os.environ.get("FONT_REGULAR", "/app/fonts/Inter-Regular.ttf")
 
+# Inter carries no Hebrew glyphs, so Hebrew text falls back to Noto Sans Hebrew.
+FONT_HEBREW_BOLD = os.environ.get("FONT_HEBREW_BOLD", "/app/fonts/NotoSansHebrew-Bold.ttf")
+FONT_HEBREW_REGULAR = os.environ.get("FONT_HEBREW_REGULAR", "/app/fonts/NotoSansHebrew-Regular.ttf")
+
 # Template prefixes — applied only when the id doesn't already carry one.
 ASSET_PREFIX = os.environ.get("ASSET_PREFIX", "A-")
 STORAGE_PREFIX = os.environ.get("STORAGE_PREFIX", "S-")
@@ -120,16 +124,52 @@ def _print_image(img: Image.Image, copies: int) -> dict[str, Any]:
 # rendering
 # --------------------------------------------------------------------------
 
+def _is_rtl(text: str) -> bool:
+    """True if the string contains Hebrew or Arabic letters."""
+    return any(0x0590 <= ord(c) <= 0x08FF or 0xFB1D <= ord(c) <= 0xFDFF for c in text)
+
+
+def _shape(text: str) -> str:
+    """Logical order -> visual order for RTL text.
+
+    Pillow is built without raqm here, so it lays glyphs out left-to-right and
+    will not apply the bidi algorithm itself. We apply it, and pin the layout
+    engine to BASIC below so a raqm-enabled Pillow can't reorder a second time
+    and undo this.
+    """
+    if not _is_rtl(text):
+        return text
+    try:
+        from bidi import get_display  # python-bidi >= 0.5
+    except ImportError:
+        try:
+            from bidi.algorithm import get_display  # python-bidi < 0.5
+        except ImportError:
+            return text
+    return get_display(text)
+
+
+def _font_paths(*texts: str) -> tuple[str, str]:
+    """(bold, regular) font paths, switched to the Hebrew faces when needed."""
+    if any(_is_rtl(t) for t in texts):
+        return FONT_HEBREW_BOLD, FONT_HEBREW_REGULAR
+    return FONT_BOLD, FONT_REGULAR
+
+
+def _truetype(path: str, size: int) -> ImageFont.FreeTypeFont:
+    return ImageFont.truetype(path, size, layout_engine=ImageFont.Layout.BASIC)  # noqa: E501
+
+
 def _fit_font(draw: ImageDraw.ImageDraw, text: str, path: str, max_w: int, max_h: int) -> ImageFont.FreeTypeFont:
     """Largest font size at which `text` fits on one line inside the box."""
     size = max(8, int(max_h))
     while size > 8:
-        font = ImageFont.truetype(path, size)
+        font = _truetype(path, size)
         box = draw.textbbox((0, 0), text, font=font)
         if box[2] - box[0] <= max_w and box[3] - box[1] <= max_h:
             return font
         size -= 2
-    return ImageFont.truetype(path, 8)
+    return _truetype(path, 8)
 
 
 def _wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_w: int) -> list[str] | None:
@@ -156,12 +196,12 @@ def _fit_wrapped(
     """Largest font whose fully wrapped lines fit the box; ellipsize as a last resort."""
     floor = max(8, round(MIN_SUBTEXT_MM * SCALE))
     for size in range(max(floor, int(max_h)), floor - 1, -2):
-        font = ImageFont.truetype(path, size)
+        font = _truetype(path, size)
         lines = _wrap(draw, text, font, max_w)
         if lines and len(lines) <= max_lines and len(lines) * size * 1.2 <= max_h:
             return font, lines
 
-    font = ImageFont.truetype(path, floor)
+    font = _truetype(path, floor)
     lines = _wrap(draw, text, font, max_w) or [text]
     lines = lines[:max_lines]
     if len(lines) < len(_wrap(draw, text, font, max_w) or lines):
@@ -183,6 +223,7 @@ def _render(heading: str, subtext: str = "", qr_url: str = "", tape_mm: int | No
     pad = round(PAD_MM * SCALE)
     max_w = MAX_W_MM * SCALE
     probe = ImageDraw.Draw(Image.new("L", (8, 8)))
+    bold_path, regular_path = _font_paths(heading, subtext)
 
     # Narrow tape has no room for a second line.
     if tape_mm < SUBTEXT_MIN_TAPE_MM:
@@ -193,13 +234,13 @@ def _render(heading: str, subtext: str = "", qr_url: str = "", tape_mm: int | No
         if subtext:
             lines = (lines + [subtext])[:3]
         line_h = (h - 2 * pad) // len(lines)
-        fonts = [_fit_font(probe, ln, FONT_BOLD, max_w - 2 * pad, round(line_h * 0.8)) for ln in lines]
+        fonts = [_fit_font(probe, ln, bold_path, max_w - 2 * pad, round(line_h * 0.8)) for ln in lines]
         widths = [probe.textbbox((0, 0), ln, font=f)[2] for ln, f in zip(lines, fonts)]
         w = min(max_w, max(widths) + 2 * pad + SCALE)
         img = Image.new("L", (w, h), 255)
         draw = ImageDraw.Draw(img)
         for i, (ln, font) in enumerate(zip(lines, fonts)):
-            draw.text((w // 2, pad + line_h * i + line_h // 2), ln, font=font, fill=0, anchor="mm")
+            draw.text((w // 2, pad + line_h * i + line_h // 2), _shape(ln), font=font, fill=0, anchor="mm")
         return img
 
     qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, border=0)
@@ -219,13 +260,13 @@ def _render(heading: str, subtext: str = "", qr_url: str = "", tape_mm: int | No
     gap = round(0.8 * SCALE)
 
     tw = max(PREF_W_MM * SCALE - pad - tx_start, 10 * SCALE)
-    head_font = _fit_font(probe, heading, FONT_BOLD, tw, head_h)
+    head_font = _fit_font(probe, heading, bold_path, tw, head_h)
     # If shrinking to fit made the heading illegible, widen the label instead.
     if head_font.size < head_h * 0.55:
-        want = _fit_font(probe, heading, FONT_BOLD, max_w, head_h)
+        want = _fit_font(probe, heading, bold_path, max_w, head_h)
         needed = round(probe.textlength(heading, font=want))
         tw = min(needed, max_w - pad - tx_start)
-        head_font = _fit_font(probe, heading, FONT_BOLD, tw, head_h)
+        head_font = _fit_font(probe, heading, bold_path, tw, head_h)
 
     w = min(max_w, tx_start + tw + pad)
     img = Image.new("L", (w, h), 255)
@@ -234,14 +275,14 @@ def _render(heading: str, subtext: str = "", qr_url: str = "", tape_mm: int | No
 
     if subtext:
         sub_h = avail_h - head_h - gap
-        sub_font, lines = _fit_wrapped(draw, subtext, FONT_REGULAR, tw, sub_h, SUBTEXT_MAX_LINES)
-        draw.text((tx_start + tw // 2, pad + head_h // 2), heading, font=head_font, fill=0, anchor="mm")
+        sub_font, lines = _fit_wrapped(draw, subtext, regular_path, tw, sub_h, SUBTEXT_MAX_LINES)
+        draw.text((tx_start + tw // 2, pad + head_h // 2), _shape(heading), font=head_font, fill=0, anchor="mm")
         line_h = sub_h / len(lines)
         for i, line in enumerate(lines):
             cy = pad + head_h + gap + round(line_h * (i + 0.5))
-            draw.text((tx_start + tw // 2, cy), line, font=sub_font, fill=0, anchor="mm")
+            draw.text((tx_start + tw // 2, cy), _shape(line), font=sub_font, fill=0, anchor="mm")
     else:
-        draw.text((tx_start + tw // 2, h // 2), heading, font=head_font, fill=0, anchor="mm")
+        draw.text((tx_start + tw // 2, h // 2), _shape(heading), font=head_font, fill=0, anchor="mm")
     return img
 
 
