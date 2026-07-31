@@ -28,6 +28,9 @@ Set that up first — this repo is useless without it.
 | `print_asset_label` | Inventory asset template — `A-` prefix, name underneath |
 | `print_storage_label` | Storage unit template — `S-` prefix, contents underneath |
 | `print_batch` | Up to 50 different labels in one run |
+| `label_canvas` | The pixel canvas to render your own artwork onto |
+| `preview_image_label` | Show submitted artwork as it would reach the printer, without printing |
+| `print_image_label` | Print arbitrary PNG/JPEG artwork you rendered yourself |
 
 ## Skills
 
@@ -51,7 +54,7 @@ Tape narrower than 18 mm drops the second line — there is no room for it.
 
 ### Hebrew and other RTL text
 
-Hebrew works, in either field, mixed with Latin or on its own:
+Hebrew works in either field, **on its own**:
 
 ```
 print_text_label(text="נקודת מסירת משלוחים")
@@ -68,6 +71,52 @@ Arabic will pick the same fallback font and be reordered correctly, but **contex
 letterforms are not shaped** — `BASIC` layout does no glyph joining. Hebrew needs no
 joining, so it is unaffected. If you need correct Arabic, install a raqm-enabled
 Pillow, drop the `_shape()` call and the `BASIC` pin, and let raqm do both.
+
+#### Mixing scripts on one label does not work — use artwork instead
+
+The font is chosen **per label, not per run**: one Hebrew character anywhere sends the
+whole label to Noto Sans Hebrew, and that face has no Latin glyphs, so the Latin half
+comes out as tofu boxes (`□□□□`). Splitting across `heading` and `subtext` does not
+help — the choice is made once for both.
+
+```
+print_label(heading="Rosehill | רוזהיל")     # -> "□□□□□□□□ | רוזהיל"
+```
+
+Rather than a per-run font fallback, render the label yourself and submit it — see
+**Custom artwork** below. That also fixes bidi properly, since a raqm-enabled Pillow
+on the rendering side does real mixed-direction layout.
+
+## Custom artwork
+
+When the built-in layouts can't express the design — mixed scripts, a logo, custom
+typography, columns — render your own bitmap and print it:
+
+```python
+label_canvas()
+# {'tapeMm': 24, 'heightPx': 288, 'maxWidthPx': 3600, 'maxLengthMm': 300,
+#  'scalePxPerMm': 12, ...}
+
+print_image_label(image="<base64 PNG>", copies=1)
+```
+
+The tape width is the label's **height**; the label runs as long as you like along the
+tape. Render at `heightPx` for the loaded tape (12 px/mm — the bridge downscales to the
+180 dpi head and trims the blank leader, so no end margins are needed).
+
+- **`image`** — PNG or JPEG, as a `data:` URL or a bare base64 string. Wrapped base64 is
+  fine. 8 MiB decoded cap.
+- **`fit`** — `scale` (default) resizes proportionally to the tape height; `pad` keeps
+  the artwork's own scale and centres it across the tape; `exact` refuses anything whose
+  height isn't already the tape height.
+- Transparency is composited onto **white**. Submitting RGBA without this would print a
+  solid black slab, since transparent converts to black rather than to bare tape.
+- Length is capped at **300 mm**, looser than the 120 mm auto-layout cap — that one
+  guards against a long string stretching tape, which doesn't apply to artwork composed
+  deliberately.
+
+Use `preview_image_label` to see the exact bitmap that would be sent, before spending
+tape.
 
 ## Install
 

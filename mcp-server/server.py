@@ -46,6 +46,11 @@ PAD_MM = 1.5
 MAX_W_MM = 120                  # hard cap on label length, guards runaway tape
 MAX_COPIES = 20                 # matches the bridge's own cap
 MAX_BATCH = 50                  # distinct labels per batch call
+MAX_IMAGE_BYTES = 8 * 1024 * 1024   # decoded size cap on submitted artwork
+# MAX_W_MM guards the auto-layout against stretching tape to fit a long string.
+# Submitted artwork is composed deliberately at a known length, so it gets a
+# looser bound — still finite, to catch a wrong-aspect image before it prints.
+MAX_IMAGE_W_MM = 300
 
 # QR labels aim for a uniform length; long names wrap rather than stretch the
 # tape. The label only grows past this if the heading itself won't fit legibly.
@@ -286,6 +291,91 @@ def _render(heading: str, subtext: str = "", qr_url: str = "", tape_mm: int | No
     return img
 
 
+# --------------------------------------------------------------------------
+# submitted artwork
+#
+# The text renderer above picks one font per label, so a label mixing scripts
+# (Latin + Hebrew, say) gets whichever face matches the RTL test and shows tofu
+# for everything that face doesn't cover. Rather than grow a per-run font
+# fallback, callers that need full control render their own image and submit it.
+# --------------------------------------------------------------------------
+
+FIT_MODES = ("scale", "pad", "exact")
+
+
+def _decode_image(data: str) -> Image.Image:
+    """Decode submitted artwork from a data: URL or a bare base64 string."""
+    if not data or not data.strip():
+        raise ValueError("image is empty")
+    payload = data.strip()
+    if payload.startswith("data:"):
+        _, _, payload = payload.partition(",")
+        if not payload:
+            raise ValueError("malformed data URL: nothing after the comma")
+    payload = "".join(payload.split())    # tolerate wrapped/newline-padded base64
+    try:
+        raw = base64.b64decode(payload, validate=True)
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"image is not valid base64: {e}") from e
+    if len(raw) > MAX_IMAGE_BYTES:
+        raise ValueError(
+            f"image is {len(raw) // 1024} KiB, over the {MAX_IMAGE_BYTES // 1024} KiB cap"
+        )
+    try:
+        img = Image.open(io.BytesIO(raw))
+        img.load()
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"not a readable image: {e}") from e
+    return img
+
+
+def _flatten(img: Image.Image) -> Image.Image:
+    """Composite transparency onto white, then reduce to greyscale.
+
+    Without this an RGBA design prints as a solid black slab: a transparent
+    background converts straight to black rather than to bare tape.
+    """
+    if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+        rgba = img.convert("RGBA")
+        img = Image.alpha_composite(Image.new("RGBA", rgba.size, (255, 255, 255, 255)), rgba)
+    return img.convert("L")
+
+
+def _fit_to_tape(img: Image.Image, tape_mm: int, fit: str) -> Image.Image:
+    """Bring submitted artwork to the tape height, and refuse runaway lengths."""
+    if fit not in FIT_MODES:
+        raise ValueError(f"fit must be one of: {', '.join(FIT_MODES)}")
+    h = tape_mm * SCALE
+
+    if fit == "exact":
+        if img.height != h:
+            raise ValueError(
+                f"image is {img.width}x{img.height}px, but the loaded {tape_mm}mm tape "
+                f"needs a height of exactly {h}px — call label_canvas(), or use fit='scale'"
+            )
+    elif fit == "scale":
+        if img.height != h:
+            img = img.resize((max(1, round(img.width * h / img.height)), h), Image.LANCZOS)
+    else:  # pad — keep the design's own scale, centre it across the tape
+        if img.height > h:
+            img = img.resize((max(1, round(img.width * h / img.height)), h), Image.LANCZOS)
+        elif img.height < h:
+            canvas = Image.new("L", (img.width, h), 255)
+            canvas.paste(img, (0, (h - img.height) // 2))
+            img = canvas
+
+    if img.width > MAX_IMAGE_W_MM * SCALE:
+        raise ValueError(
+            f"label would run {img.width / SCALE:.0f}mm, over the {MAX_IMAGE_W_MM}mm cap; "
+            "shorten the design or make it less wide relative to its height"
+        )
+    return img
+
+
+def _prepare_image(image: str, fit: str) -> Image.Image:
+    return _fit_to_tape(_flatten(_decode_image(image)), _tape_mm(), fit)
+
+
 def _clamp_copies(copies: int) -> int:
     return min(MAX_COPIES, max(1, int(copies)))
 
@@ -331,6 +421,19 @@ def printer_capabilities() -> dict[str, Any]:
             "maxBatchLabels": MAX_BATCH,
             "subtextRequiresTapeMm": SUBTEXT_MIN_TAPE_MM,
             "colour": "1-bit black on tape; no greyscale, no colour",
+        },
+        "imageSubmission": {
+            "tool": "print_image_label",
+            "canvasTool": "label_canvas",
+            "accepts": "PNG or JPEG, as a data: URL or a bare base64 string",
+            "maxDecodedBytes": MAX_IMAGE_BYTES,
+            "maxLengthMm": MAX_IMAGE_W_MM,
+            "fitModes": list(FIT_MODES),
+            "whenToUse": (
+                "Anything the text renderer cannot express. It selects a single "
+                "font per label, so a label mixing scripts shows tofu for the "
+                "glyphs that face lacks — render it yourself and submit it."
+            ),
         },
         "driverExposes": [
             "copies", "font", "font-size", "font-margin", "align", "image",
@@ -400,6 +503,65 @@ def print_text_label(text: str, copies: int = 1) -> dict[str, Any]:
     if not text.strip():
         return {"ok": False, "error": "text is empty"}
     return _print_image(_render(text), _clamp_copies(copies))
+
+
+@mcp.tool()
+def label_canvas() -> dict[str, Any]:
+    """The exact pixel canvas to render your own label artwork onto.
+
+    Call this before generating a design for `print_image_label`. The tape width
+    is the label's HEIGHT; the label runs as long as you like along the tape, up
+    to the length cap.
+    """
+    tape_mm = _tape_mm()
+    return {
+        "tapeMm": tape_mm,
+        "heightPx": tape_mm * SCALE,
+        "maxWidthPx": MAX_IMAGE_W_MM * SCALE,
+        "maxLengthMm": MAX_IMAGE_W_MM,
+        "scalePxPerMm": SCALE,
+        "colour": "1-bit black on tape — render black on white; greyscale is thresholded",
+        "notes": (
+            "Match heightPx exactly, or let fit='scale' resize for you. Flatten "
+            "transparency onto white. The bridge downscales to the 180 dpi head "
+            "and trims the blank leader, so no margins are needed at the ends."
+        ),
+    }
+
+
+@mcp.tool()
+def preview_image_label(image: str, fit: str = "scale") -> MCPImage:
+    """Return submitted artwork exactly as it would reach the printer, without printing.
+
+    Use this to check scaling and cropping before spending tape.
+
+    Args:
+        image: PNG or JPEG artwork, as a data: URL or a bare base64 string.
+        fit: How to reconcile the artwork height with the tape — see `print_image_label`.
+    """
+    return MCPImage(data=_to_png_bytes(_prepare_image(image, fit)), format="png")
+
+
+@mcp.tool()
+def print_image_label(image: str, copies: int = 1, fit: str = "scale") -> dict[str, Any]:
+    """Print arbitrary artwork as a label — a PNG or JPEG you rendered yourself.
+
+    Use this when the built-in text and QR layouts can't express the design:
+    mixed scripts on one line, logos, custom typography, multi-column layouts.
+    Call `label_canvas()` first for the pixel canvas to draw onto.
+
+    Args:
+        image: PNG or JPEG artwork, as a data: URL or a bare base64 string.
+        copies: Number of identical labels (1-20), each cut separately.
+        fit: "scale" resizes proportionally to the tape height (default);
+            "pad" keeps the artwork's own scale and centres it across the tape;
+            "exact" refuses artwork whose height isn't already the tape height.
+    """
+    try:
+        img = _prepare_image(image, fit)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    return _print_image(img, _clamp_copies(copies))
 
 
 @mcp.tool()

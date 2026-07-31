@@ -7,6 +7,12 @@ Brother P-touch over USB.
 Rendering is done here with PIL + `qrcode` at 12 px/mm (~305 dpi); the bridge
 downscales to the 180 dpi print head and thresholds to 1-bit.
 
+Callers can also skip the built-in renderer entirely and submit their own bitmap
+to `print_image_label` — `label_canvas` reports the pixel canvas to draw onto.
+That is the supported route for anything the text renderer can't express, mixed
+scripts above all: it picks one font per label, so a Latin+Hebrew label prints
+tofu for whichever script the chosen face lacks.
+
 See the [repo README](../README.md) for the tool list, configuration and install.
 
 ## Run locally
