@@ -36,7 +36,47 @@ the printer itself may be perfectly fine.
 - If the bridge and the MCP are on different machines, check the network path between
   them before touching the printer.
 
-## 3. Media errors
+## 3. `LIBUSB_ERROR_ACCESS` — permissions, not hardware
+
+If `/health` returns `ok: false` with the printer **found** but not openable:
+
+```
+PT-P710BT found on USB bus 1, device 3
+libusb_open error :LIBUSB_ERROR_ACCESS
+```
+
+the printer, cable and bridge are all fine. The bridge's service user cannot open the
+device node. Do not chase the printer or ask the user to power-cycle it.
+
+`ptouch-print`'s own udev rule sets `MODE="0660"` and `TAG+="uaccess"`. `uaccess`
+grants its ACL only to a user with an active **local seat** session, so on a headless
+server it grants nobody anything — while still looking like the rule fired. The tell is
+`getfacl` on the node showing only base entries and no `user:` lines, with the node left
+`root:lp 0660`.
+
+Check, on the bridge host:
+
+```bash
+ls -l /dev/bus/usb/<bus>/<dev>          # expect root:lp 0660
+systemctl show <bridge-service> -p User -p SupplementaryGroups
+id <that-user>                          # is lp in the list?
+```
+
+The durable fix is a udev rule setting `GROUP="lp"` explicitly plus
+`SupplementaryGroups=lp` on the unit — both keyed on `idVendor`/`idProduct`, so they are
+independent of which USB port is used. Shipped in
+[ptouch-cube-print-bridge](https://github.com/danielrosehill/ptouch-cube-print-bridge)
+(`udev/`, and `docs/hardware-notes.md` for the full write-up).
+
+**A one-off `chmod` or `setfacl` on the device node is the wrong fix.** It works
+immediately and then fails at the next reboot or replug, presenting as an intermittent
+hardware fault. If the printer "worked yesterday" and the host has rebooted since,
+suspect exactly this.
+
+Note this failure is **port-independent**, so a recent cable move is a red herring — the
+rule matches on vendor/product, not on the port.
+
+## 4. Media errors
 
 `printer_status` surfaces the printer's error word.
 
@@ -55,7 +95,7 @@ every job, the driver needs patching rather than the printer needing tape. The p
 and the full write-up are in
 [ptouch-cube-print-bridge](https://github.com/danielrosehill/ptouch-cube-print-bridge).
 
-## 4. Layout looks wrong
+## 5. Layout looks wrong
 
 - **Subtext missing?** Tape narrower than 18 mm has no room for a second line and it is
   dropped deliberately. Check `tapeMm` in `printer_status`.
