@@ -1,12 +1,25 @@
 {
   "name": "label-printer",
-  "version": "1.0.0",
-  "description": "Print labels on a Brother P-touch label printer from Claude Code: single labels, N copies, batch runs, and QR-coded asset and storage-unit templates for inventory work. Bundles a streamable-HTTP MCP server that renders labels and hands them to a USB print bridge on a Linux host.",
+  "version": "1.1.0",
+  "description": "Print labels from Claude Code on Brother QL and P-touch label printers on Linux. Discovers printers over mDNS, USB and CUPS and keeps a machine-local registry so later prints can name one; renders text and QR labels to the pixel canvas of the loaded DK or TZe media; previews without touching the printer, because brother_ql converts and transmits in a single step with no dry run. Ships a media catalogue of DK and TZe product codes, reusable label templates in the user's data directory, and a Linux driver-install skill covering brother_ql, ptouch-print, mDNS and CUPS. Zebra and DYMO are discovered and registered but not yet printable. Also bundles the original streamable-HTTP MCP server for P-touch setups built around a USB print bridge.",
   "author": {
     "name": "Daniel Rosehill",
-    "url": "https://github.com/danielrosehill"
+    "email": "public@danielrosehill.com",
+    "url": "https://danielrosehill.com"
   },
   "repository": "https://github.com/danielrosehill/label-printer-plugin",
   "license": "MIT",
-  "keywords": ["label-printer", "brother", "p-touch", "ptouch", "qr-code", "inventory", "mcp", "printing"]
+  "keywords": [
+    "label-printer",
+    "brother",
+    "brother-ql",
+    "p-touch",
+    "ptouch",
+    "qr-code",
+    "inventory",
+    "mcp",
+    "printing",
+    "linux",
+    "cups"
+  ]
 }

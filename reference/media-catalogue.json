@@ -1,0 +1,80 @@
+{
+  "_comment": "Label media known to this plugin. width_mm is the tape/roll width; printable_px is the head-width in pixels at the printer's native DPI. Continuous rolls have no length_px. Verified against brother_ql 0.9.4 'info labels' on 2026-08-16.",
+  "families": {
+    "DK": {
+      "vendor": "Brother",
+      "used_by": ["QL-*"],
+      "dpi": 300,
+      "note": "Die-cut and continuous paper/film rolls for the QL series."
+    },
+    "TZe": {
+      "vendor": "Brother",
+      "used_by": ["PT-*"],
+      "dpi": 180,
+      "note": "Laminated continuous tape cassettes for the P-touch series."
+    }
+  },
+  "geometry": {
+    "DK": {
+      "12":      {"printable_px": 106,  "width_mm": 12,  "continuous": true},
+      "29":      {"printable_px": 306,  "width_mm": 29,  "continuous": true},
+      "38":      {"printable_px": 413,  "width_mm": 38,  "continuous": true},
+      "50":      {"printable_px": 554,  "width_mm": 50,  "continuous": true},
+      "54":      {"printable_px": 590,  "width_mm": 54,  "continuous": true},
+      "62":      {"printable_px": 696,  "width_mm": 62,  "continuous": true},
+      "62red":   {"printable_px": 696,  "width_mm": 62,  "continuous": true, "two_color": true},
+      "102":     {"printable_px": 1164, "width_mm": 102, "continuous": true},
+      "17x54":   {"printable_px": 165,  "length_px": 566,  "width_mm": 17,  "length_mm": 54},
+      "17x87":   {"printable_px": 165,  "length_px": 956,  "width_mm": 17,  "length_mm": 87},
+      "23x23":   {"printable_px": 202,  "length_px": 202,  "width_mm": 23,  "length_mm": 23},
+      "29x42":   {"printable_px": 306,  "length_px": 425,  "width_mm": 29,  "length_mm": 42},
+      "29x90":   {"printable_px": 306,  "length_px": 991,  "width_mm": 29,  "length_mm": 90},
+      "39x90":   {"printable_px": 413,  "length_px": 991,  "width_mm": 38,  "length_mm": 90},
+      "39x48":   {"printable_px": 425,  "length_px": 495,  "width_mm": 39,  "length_mm": 48},
+      "52x29":   {"printable_px": 578,  "length_px": 271,  "width_mm": 52,  "length_mm": 29},
+      "62x29":   {"printable_px": 696,  "length_px": 271,  "width_mm": 62,  "length_mm": 29},
+      "62x100":  {"printable_px": 696,  "length_px": 1109, "width_mm": 62,  "length_mm": 100},
+      "102x51":  {"printable_px": 1164, "length_px": 526,  "width_mm": 102, "length_mm": 51},
+      "102x152": {"printable_px": 1164, "length_px": 1660, "width_mm": 102, "length_mm": 153},
+      "d12":     {"printable_px": 94,   "length_px": 94,   "width_mm": 12,  "round": true},
+      "d24":     {"printable_px": 236,  "length_px": 236,  "width_mm": 24,  "round": true},
+      "d58":     {"printable_px": 618,  "length_px": 618,  "width_mm": 58,  "round": true}
+    },
+    "TZe": {
+      "3.5": {"printable_px": 24,  "width_mm": 3.5, "continuous": true},
+      "6":   {"printable_px": 32,  "width_mm": 6,   "continuous": true},
+      "9":   {"printable_px": 64,  "width_mm": 9,   "continuous": true},
+      "12":  {"printable_px": 76,  "width_mm": 12,  "continuous": true},
+      "18":  {"printable_px": 120, "width_mm": 18,  "continuous": true},
+      "24":  {"printable_px": 128, "width_mm": 24,  "continuous": true},
+      "36":  {"printable_px": 240, "width_mm": 36,  "continuous": true}
+    }
+  },
+  "products": {
+    "DK-11201": {"family": "DK", "geometry": "29x90",  "material": "paper", "colour": "white", "note": "standard address, die-cut"},
+    "DK-11202": {"family": "DK", "geometry": "62x100", "material": "paper", "colour": "white", "note": "shipping, die-cut"},
+    "DK-11209": {"family": "DK", "geometry": "29x62",  "material": "paper", "colour": "white", "note": "small address, die-cut; not in brother_ql's table"},
+    "DK-11219": {"family": "DK", "geometry": "d12",    "material": "paper", "colour": "white", "note": "12mm round, die-cut"},
+    "DK-11221": {"family": "DK", "geometry": "23x23",  "material": "paper", "colour": "white", "note": "square, die-cut"},
+    "DK-22113": {"family": "DK", "geometry": "62",     "material": "film",  "colour": "clear", "note": "durable, continuous"},
+    "DK-22205": {"family": "DK", "geometry": "62",     "material": "paper", "colour": "white", "note": "continuous"},
+    "DK-22210": {"family": "DK", "geometry": "29",     "material": "paper", "colour": "white", "note": "continuous"},
+    "DK-22211": {"family": "DK", "geometry": "29",     "material": "film",  "colour": "white", "note": "continuous"},
+    "DK-22212": {"family": "DK", "geometry": "62",     "material": "film",  "colour": "white", "note": "continuous"},
+    "DK-22214": {"family": "DK", "geometry": "12",     "material": "paper", "colour": "white", "note": "continuous"},
+    "DK-22223": {"family": "DK", "geometry": "50",     "material": "paper", "colour": "white", "note": "continuous"},
+    "DK-22225": {"family": "DK", "geometry": "38",     "material": "paper", "colour": "white", "note": "continuous"},
+    "DK-22251": {"family": "DK", "geometry": "62red",  "material": "paper", "colour": "white", "note": "black+red; needs --red"},
+    "DK-22606": {"family": "DK", "geometry": "62",     "material": "film",  "colour": "yellow", "note": "durable, continuous"},
+    "DK-44205": {"family": "DK", "geometry": "62",     "material": "paper", "colour": "white", "note": "removable adhesive, continuous"},
+    "DK-44605": {"family": "DK", "geometry": "62",     "material": "paper", "colour": "yellow", "note": "removable adhesive, continuous"},
+    "DK-N55224":{"family": "DK", "geometry": "54",     "material": "paper", "colour": "white", "note": "non-adhesive, continuous"},
+    "TZe-211":  {"family": "TZe", "geometry": "6",  "material": "laminated", "colour": "white"},
+    "TZe-221":  {"family": "TZe", "geometry": "9",  "material": "laminated", "colour": "white"},
+    "TZe-231":  {"family": "TZe", "geometry": "12", "material": "laminated", "colour": "white"},
+    "TZe-241":  {"family": "TZe", "geometry": "18", "material": "laminated", "colour": "white"},
+    "TZe-251":  {"family": "TZe", "geometry": "24", "material": "laminated", "colour": "white"},
+    "TZe-151":  {"family": "TZe", "geometry": "24", "material": "laminated", "colour": "clear"},
+    "TZe-M951": {"family": "TZe", "geometry": "24", "material": "laminated", "colour": "matte silver", "note": "durable/industrial"}
+  }
+}
