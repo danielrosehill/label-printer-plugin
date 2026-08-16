@@ -47,6 +47,26 @@ step; `--no-cut` suppresses the cutter, not the print. A label came out of the
 printer during development on the assumption that it would not. Preview is
 therefore a pure-PIL path in `render.py` that never opens a socket.
 
+**`brother_ql` 0.9.4 is incompatible with Pillow ≥ 10, and fails only sometimes.**
+`conversion.py` resizes with `Image.ANTIALIAS`, which Pillow removed in 10.0, so
+a job that needs resizing dies with:
+
+```
+AttributeError: module 'PIL.Image' has no attribute 'ANTIALIAS'
+```
+
+The trap is that it is **conditional on the image dimensions**. brother_ql only
+resizes when the image width differs from the label's printable width, so a
+square test image at exactly `dots_printable` prints perfectly and a real
+landscape label crashes — on the same printer, same Pillow, minutes apart. It
+reads as an intermittent printer fault and is not one.
+
+`render.py` avoids it rather than patching it: the image is rotated a quarter
+turn and, if necessary, resized in Pillow to exactly `printable_px` before
+`brother_ql` sees it, so the offending branch is never reached. That works on
+any Pillow version. If you call `brother_ql` directly, either pin Pillow < 10
+or pre-size the image yourself.
+
 **The deprecation warning is noise.** Every `brother_ql` invocation on 0.9.4
 prints `brother_ql.devicedependent is deprecated and will be removed in a future
 release` to stderr, including successful ones. Do not treat it as a failure.

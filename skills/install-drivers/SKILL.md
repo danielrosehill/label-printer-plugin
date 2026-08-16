@@ -47,6 +47,13 @@ Version 0.9.4 prints fine and emits a `brother_ql.devicedependent is deprecated`
 warning on every invocation. That warning is noise — it is not a failure, and it
 appears even on successful jobs.
 
+It is, however, **incompatible with Pillow ≥ 10** — it resizes with the removed
+`Image.ANTIALIAS`. This plugin works around it by pre-sizing the image, so no
+Pillow pin is needed here. If the user calls `brother_ql` directly and hits
+`AttributeError: module 'PIL.Image' has no attribute 'ANTIALIAS'`, that is the
+cause, and it appears only for images that need resizing — see
+[`docs/backends.md`](../../docs/backends.md).
+
 For a **USB** QL, the user must be able to reach the device without root:
 
 ```bash

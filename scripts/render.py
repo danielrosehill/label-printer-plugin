@@ -214,12 +214,29 @@ def resolve_printer(pid: str | None) -> dict:
 
 
 def send(img, printer: dict, geo: dict, copies: int, cut: bool) -> dict:
+    Image, _, _ = need_pillow()
     backend = printer.get("backend")
     if backend in ("zebra_wip", "dymo_wip"):
         sys.exit(
             f"Backend '{backend}' is not implemented yet — this plugin can discover and "
             f"register {printer.get('model')} but cannot print to it. See docs/backends.md."
         )
+
+    if backend in ("brother_ql_network", "brother_ql_usb"):
+        # brother_ql wants the image at exactly the head width, and rasters it
+        # down the tape. We render landscape, so rotate a quarter turn first.
+        #
+        # This is not cosmetic. brother_ql 0.9.4's conversion.py resizes with
+        # Image.ANTIALIAS, which Pillow removed in 10.0 — so on any modern
+        # Pillow a job that needs resizing dies with
+        #   AttributeError: module 'PIL.Image' has no attribute 'ANTIALIAS'
+        # Handing it an image already at dots_printable skips that branch
+        # entirely, so this works regardless of the installed Pillow.
+        img = img.rotate(-90, expand=True)
+        want = geo["printable_px"]
+        if img.size[0] != want:
+            h = max(1, round(img.size[1] * want / img.size[0]))
+            img = img.resize((want, h), Image.LANCZOS)
 
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
         png = tf.name
@@ -311,8 +328,16 @@ def main() -> None:
     if args.copies > 20:
         sys.exit("Refusing more than 20 copies in one call — tape and rolls are consumable.")
     out = send(img, printer, geo, args.copies, cut=not args.no_cut)
+    # Report what happened, not what was attempted. `runs` is per-copy for the
+    # brother_ql backends; the others report a single rc.
+    rcs = [r["rc"] for r in out.get("runs", [])] or [out.get("rc", 0)]
+    ok = all(rc == 0 for rc in rcs)
     print(json.dumps({"printer": printer["id"], "media": geo["product"],
-                      "canvas_px": list(img.size), "printed": True, "result": out}, indent=2))
+                      "canvas_px": list(img.size), "printed": ok,
+                      "copies_sent": sum(1 for rc in rcs if rc == 0),
+                      "result": out}, indent=2))
+    if not ok:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
