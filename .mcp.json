@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "label-printer": {
-      "type": "http",
-      "url": "${LABEL_PRINTER_MCP_URL}"
-    }
-  }
-}
