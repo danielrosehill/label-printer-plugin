@@ -236,7 +236,7 @@ Set that up first — the MCP path does not work without it.
 | `print_image_label` | Print arbitrary PNG/JPEG artwork you rendered yourself |
 
 The plugin ships no MCP connection. Register your deployed server on your gateway, and call its tools from there
-(on Daniel's: the `label-printer` upstream, `mcp__gateway__label-printer__<tool>`).
+(for example the `label-printer` upstream, `mcp__gateway__label-printer__<tool>`).
 
 Source is in [`mcp-server/`](mcp-server/). It speaks streamable HTTP on `:3000` by
 default, or stdio with `MCP_TRANSPORT=stdio`.
