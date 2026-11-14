@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["pillow>=10.1", "resvg-py>=0.1.5", "qrcode>=7.4", "python-bidi>=0.4"]
+# dependencies = ["pillow>=10.1", "resvg-py>=0.1.5", "qrcode>=7.4", "python-bidi>=0.5"]
 # ///
 """Design a label, preview it, and (only when asked) print it.
 
@@ -168,7 +168,7 @@ def build(args):
         sys.exit("name a printer with --printer (" + ", ".join(p["id"] for p in printers) + ") or pass --media "
                  "to design without one" if printers else "no printers registered: pass --media, or run the setup skill")
     st = style_for(args.style or (printer or {}).get("style"))
-    for k, a in (("font", "font"), ("layout", "layout"), ("wrap_mm", "wrap_mm"), ("max_len_mm", "max_len_mm"),
+    for k, a in (("font", "font"), ("font_hebrew", "font_hebrew"), ("rtl", "rtl"), ("layout", "layout"), ("wrap_mm", "wrap_mm"), ("max_len_mm", "max_len_mm"),
                  ("margin_mm", "margin_mm")):
         v = getattr(args, a, None)
         if v is not None:
@@ -197,6 +197,8 @@ def add_design_args(s):
     s.add_argument("--layout", choices=["auto", "one-line", "two-line", "text", "icon-top", "icon", "qr", "left"])
     s.add_argument("--style", help="saved style name (default: the user's default style)")
     s.add_argument("--font", help="font name ('IBM Plex Sans Bold', 'Inter SemiBold') or a .ttf path")
+    s.add_argument("--font-hebrew", dest="font_hebrew", help="font for lines containing Hebrew (default Heebo Bold)")
+    s.add_argument("--rtl", choices=["auto", "on", "off"], help="right-to-left layout; auto = when the text has Hebrew/Arabic")
     s.add_argument("--wrap-mm", dest="wrap_mm", type=float)
     s.add_argument("--max-len-mm", dest="max_len_mm", type=float)
     s.add_argument("--margin-mm", dest="margin_mm", type=float)
@@ -239,7 +241,7 @@ def main():
     sd.add_argument("name")
     sv = sty.add_parser("save")
     sv.add_argument("name")
-    for k in ("font", "icon_prefix", "layout"):
+    for k in ("font", "font_hebrew", "icon_prefix", "layout", "rtl"):
         sv.add_argument(f"--{k.replace('_', '-')}", dest=k)
     for k in ("wrap_mm", "max_len_mm", "min_len_mm", "margin_mm", "line_gap"):
         sv.add_argument(f"--{k.replace('_', '-')}", dest=k, type=float)
@@ -268,7 +270,7 @@ def main():
             style_for(args.name)
             s["default"] = args.name
             out({"written": save_styles(s), "default": args.name})
-        vals = {k: getattr(args, k) for k in ("font", "icon_prefix", "layout", "wrap_mm", "max_len_mm",
+        vals = {k: getattr(args, k) for k in ("font", "font_hebrew", "rtl", "icon_prefix", "layout", "wrap_mm", "max_len_mm",
                                                "min_len_mm", "margin_mm", "line_gap", "invert", "border",
                                                "description") if getattr(args, k) is not None}
         s.setdefault("styles", {}).setdefault(args.name, {}).update(vals)

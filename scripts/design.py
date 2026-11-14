@@ -29,13 +29,15 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 BUNDLED = PLUGIN_ROOT / "mcp-server" / "fonts"
 FALLBACK_FONT = BUNDLED / "Inter-ExtraBold.ttf"
-HEBREW_FONT = BUNDLED / "NotoSansHebrew-Bold.ttf"
+HEBREW_FONT = BUNDLED / "NotoSansHebrew-Bold.ttf"  # last-resort Hebrew fallback
 CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "label-printer"
 UA = {"User-Agent": "label-printer/2 (label renderer)"}
 
 # Defaults every style starts from. A user's styles.json overrides these.
 BUILTIN_STYLE = {
     "font": "IBM Plex Sans Bold",
+    "font_hebrew": "Heebo Bold",  # used for any line containing Hebrew; pairs with IBM Plex Sans
+    "rtl": "auto",               # auto | on | off: mirror the layout and run text right-to-left
     "icon_prefix": "mdi",        # bare icon names resolve here; mdi icons are filled
     "layout": "auto",            # auto | one-line | two-line | text | icon-top | icon | qr
     "wrap_mm": 85,               # continuous media: wrap one line to two past this length
@@ -109,18 +111,27 @@ def _download_font(family: str, weight: int) -> Path:
         return target
     # Google Fonts: an old-browser User-Agent makes css2 answer with plain TTF URLs.
     q = urllib.parse.quote_plus(family)
-    css = _fetch(f"https://fonts.googleapis.com/css2?family={q}:wght@{weight}",
-                 headers={"User-Agent": "Wget/1.21"}).decode()
-    m = re.search(r"url\((https://[^)]+\.ttf)\)", css)
+    m = None
+    # Single-weight families (Secular One, Bebas Neue ...) reject wght@700: retry without a weight.
+    for spec in (f"{q}:wght@{weight}", q):
+        try:
+            css = _fetch(f"https://fonts.googleapis.com/css2?family={spec}",
+                         headers={"User-Agent": "Wget/1.21"}).decode()
+        except Exception:  # noqa: BLE001 - HTTP 400 for an unavailable weight
+            continue
+        m = re.search(r"url\((https://[^)]+\.ttf)\)", css)
+        if m:
+            break
     if not m:
         raise DesignError(f"font '{family}' not found on Google Fonts")
     target.write_bytes(_fetch(m.group(1), timeout=60))
     return target
 
 
-def resolve_font(name: str | None, *, allow_download: bool = True) -> dict:
+def resolve_font(name: str | None, *, allow_download: bool = True, fallback: Path = FALLBACK_FONT) -> dict:
     """Return {'path', 'source'} for a font name or file path."""
     name = name or BUILTIN_STYLE["font"]
+    FALLBACK = fallback
     p = Path(os.path.expanduser(name))
     if p.suffix.lower() in (".ttf", ".otf") and p.exists():
         return {"path": str(p), "source": "file"}
@@ -135,22 +146,35 @@ def resolve_font(name: str | None, *, allow_download: bool = True) -> dict:
         try:
             return {"path": str(_download_font(family, weight)), "source": "downloaded"}
         except Exception as e:  # noqa: BLE001 - any failure falls back to the bundled font
-            return {"path": str(FALLBACK_FONT), "source": f"fallback ({family}: {e})"}
-    return {"path": str(FALLBACK_FONT), "source": "fallback"}
+            return {"path": str(FALLBACK), "source": f"fallback ({family}: {e})"}
+    return {"path": str(FALLBACK), "source": "fallback"}
+
+
+RTL_CHARS = re.compile(r"[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufeff]")
 
 
 def is_rtl(s: str) -> bool:
-    return any("֐" <= c <= "ࣿ" for c in s or "")
+    return bool(RTL_CHARS.search(s or ""))
 
 
-def shape(s: str) -> str:
-    if not is_rtl(s):
-        return s
+def covers_hebrew(path: str) -> bool:
+    """Does the font have Hebrew glyphs? (A missing glyph renders like the .notdef box.)"""
     try:
-        from bidi.algorithm import get_display
-        return get_display(s)
-    except ImportError:
-        return s[::-1]
+        f = ImageFont.truetype(path, 40)
+        def ink(ch):
+            m = f.getmask(ch)
+            return bytes(m), m.size
+        return ink("\u05d0") != ink("\uffff")
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def has_raqm() -> bool:
+    try:
+        from PIL import features
+        return bool(features.check("raqm"))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 # ---------------------------------------------------------------- icons
@@ -218,28 +242,85 @@ def qr_image(data: str, px: int) -> Image.Image:
     return img.resize((px, px), Image.NEAREST)
 
 
-# ---------------------------------------------------------------- text fitting
+# ---------------------------------------------------------------- typesetting
+class Type:
+    """Font choice, bidi and measurement for one label.
+
+    With libraqm (Pillow's RAQM layout engine) text is passed in logical order and raqm does
+    bidi reordering and shaping; the base direction is RTL when the label is RTL. Without
+    raqm, python-bidi's get_display reorders each line and Pillow's basic engine draws it.
+    Either way a line containing Hebrew uses the Hebrew font; others use the Latin one.
+    """
+
+    def __init__(self, latin: str, hebrew: str, rtl: bool):
+        self.latin, self.hebrew, self.rtl = latin, hebrew, rtl
+        self.raqm = has_raqm()
+        self._cache: dict = {}
+
+    def font(self, line: str, size: int):
+        path = self.hebrew if is_rtl(line) else self.latin
+        key = (path, size)
+        if key not in self._cache:
+            eng = ImageFont.Layout.RAQM if self.raqm else ImageFont.Layout.BASIC
+            self._cache[key] = ImageFont.truetype(path, size, layout_engine=eng)
+        return self._cache[key]
+
+    # Multi-part numbers (times, ranges, dates, phone numbers) inside RTL text get reordered by
+    # the bidi algorithm ("9:00–17:00" shows as "17:00–9:00"). Isolate each as an LTR run
+    # (U+2066 ... U+2069), the rtl-skills "isolate multi-part numbers" rule.
+    NUMRUN = re.compile(r"\d+(?:[:./\-]\d+)*(?:\s*[\u2013\u2014-]\s*\d+(?:[:./\-]\d+)*)+|\d+(?:[:./\-]\d+)+")
+
+    def _isolate(self, line: str) -> str:
+        if not (self.rtl or is_rtl(line)):
+            return line
+        return self.NUMRUN.sub(lambda m: "\u2066" + m.group(0) + "\u2069", line)
+
+    def _args(self, line: str):
+        line = self._isolate(line)
+        if self.raqm:
+            return line, ({"direction": "rtl"} if (self.rtl or is_rtl(line)) else {})
+        if is_rtl(line) or self.rtl:
+            base = "R" if self.rtl else "L"
+            try:
+                try:
+                    from bidi import get_display  # python-bidi >= 0.5: full UBA incl. isolates
+                except ImportError:
+                    from bidi.algorithm import get_display
+                try:
+                    out = get_display(line, base_dir=base)
+                except AssertionError:  # legacy python-bidi has no isolates
+                    out = get_display(line.replace("\u2066", "").replace("\u2069", ""), base_dir=base)
+            except ImportError:
+                out = line[::-1]
+            return out.replace("\u2066", "").replace("\u2069", ""), {}
+        return line, {}
+
+    def bbox(self, line: str, size: int):
+        text, kw = self._args(line)
+        return self.font(line, size).getbbox(text, **kw)
+
+    def draw(self, d, xy, line: str, size: int):
+        text, kw = self._args(line)
+        d.text(xy, text, font=self.font(line, size), fill=0, **kw)
+
+
 def split_lines(text: str) -> list[str]:
     return [ln.strip() for ln in (text or "").replace("\\n", "\n").split("\n") if ln.strip()]
 
 
-def _font_for(line: str, fp: str, size: int):
-    return ImageFont.truetype(str(HEBREW_FONT) if is_rtl(line) else fp, size)
-
-
-def _measure(lines, fp, size, gap_ratio):
-    boxes = [_font_for(ln, fp, size).getbbox(shape(ln)) for ln in lines]
+def _measure(lines, ty: Type, size, gap_ratio):
+    boxes = [ty.bbox(ln, size) for ln in lines]
     w = max(b[2] - b[0] for b in boxes)
     h = sum(b[3] - b[1] for b in boxes) + int(size * gap_ratio) * (len(lines) - 1)
     return w, h, boxes
 
 
-def fit(lines, fp, max_w, max_h, gap_ratio=0.12) -> tuple[int, int, int]:
+def fit(lines, ty: Type, max_w, max_h, gap_ratio=0.12) -> tuple[int, int, int]:
     """Largest font size whose block fits max_w x max_h. Returns (size, w, h)."""
-    lo, hi, best = 6, 600, (6, *_measure(lines, fp, 6, gap_ratio)[:2])
+    lo, hi, best = 6, 600, (6, *_measure(lines, ty, 6, gap_ratio)[:2])
     while lo <= hi:
         mid = (lo + hi) // 2
-        w, h, _ = _measure(lines, fp, mid, gap_ratio)
+        w, h, _ = _measure(lines, ty, mid, gap_ratio)
         if w <= max_w and h <= max_h:
             best, lo = (mid, w, h), mid + 1
         else:
@@ -247,22 +328,27 @@ def fit(lines, fp, max_w, max_h, gap_ratio=0.12) -> tuple[int, int, int]:
     return best
 
 
-def draw_block(d, lines, fp, size, box, gap_ratio=0.12, align="center"):
+def draw_block(d, lines, ty: Type, size, box, gap_ratio=0.12, align="center"):
     x0, y0, bw, bh = box
     gap = int(size * gap_ratio)
-    _, tot, boxes = _measure(lines, fp, size, gap_ratio)
+    _, tot, boxes = _measure(lines, ty, size, gap_ratio)
     y = y0 + (bh - tot) // 2
     for ln, b in zip(lines, boxes):
-        f = _font_for(ln, fp, size)
         lw = b[2] - b[0]
-        x = x0 + ((bw - lw) // 2 if align == "center" else 0)
-        d.text((x - b[0], y - b[1]), shape(ln), font=f, fill=0)
+        x = x0 + {"center": (bw - lw) // 2, "right": bw - lw}.get(align, 0)
+        ty.draw(d, (x - b[0], y - b[1]), ln, size)
         y += (b[3] - b[1]) + gap
 
 
+PUNCT_WORD = re.compile(r"^[\W_]+$")
+
+
 def two_line_splits(line: str) -> list[list[str]]:
+    """Every word-boundary split, except ones that strand a dash or other punctuation-only
+    word at the end of line 1 or the start of line 2."""
     words = line.split()
-    return [[" ".join(words[:i]), " ".join(words[i:])] for i in range(1, len(words))]
+    return [[" ".join(words[:i]), " ".join(words[i:])] for i in range(1, len(words))
+            if not PUNCT_WORD.match(words[i - 1]) and not PUNCT_WORD.match(words[i])]
 
 
 # ---------------------------------------------------------------- layouts
@@ -277,15 +363,16 @@ def finish(img: Image.Image, invert: bool, border: bool) -> Image.Image:
     return img
 
 
-def render_continuous(lines, sub, icon, qr, geo, st, fp) -> tuple[Image.Image, dict]:
-    """Tape / continuous roll: fixed height, length grows with the content."""
+def render_continuous(lines, sub, icon, qr, geo, st, ty: Type) -> tuple[Image.Image, dict]:
+    """Tape / continuous roll: fixed height, length grows with the content.
+    RTL mirrors it: icon/QR at the right, text right-aligned against them."""
     h = geo["canvas_h"]
     dpmm = geo["dpi"] / 25.4
     pad = max(2, h // 16)
     inner = h - 2 * pad
     gap_ratio = st["line_gap"]
     layout = st["layout"]
-    slots = []  # (kind, value) squares on the left
+    slots = []
     if qr:
         slots.append(("qr", qr))
     if icon and layout not in ("text",):
@@ -313,45 +400,42 @@ def render_continuous(lines, sub, icon, qr, geo, st, fp) -> tuple[Image.Image, d
             cands = cands[1:]
         if layout == "one-line":
             cands = [[" ".join(lines)]]
-        scored = []
-        for c in cands:
-            size, w, _ = fit(c, fp, 10**6, main_h, gap_ratio)
-            scored.append((c, size, w))
+        scored = [(c, *fit(c, ty, 10**6, main_h, gap_ratio)[:2]) for c in cands]
         one = scored[0]
         if layout == "auto" and len(lines) == 1 and lead + one[2] + pad > wrap_px and len(scored) > 1:
-            # Wrap: of the two-line splits, the one giving the shortest label.
-            choice = min(scored[1:], key=lambda s: s[2])[0]
+            choice = min(scored[1:], key=lambda x: x[2])[0]
             note["wrapped"] = f"one line would be {round((lead + one[2] + pad) / dpmm)} mm > wrap_mm {st['wrap_mm']}"
         elif layout == "two-line" and scored:
-            choice = min(scored, key=lambda s: s[2])[0]
+            choice = min(scored, key=lambda x: x[2])[0]
         else:
             choice = one[0]
-    size, tw, _ = fit(choice, fp, max_text_w, main_h, gap_ratio) if choice else (0, 0, 0)
+    size, tw, _ = fit(choice, ty, max_text_w, main_h, gap_ratio) if choice else (0, 0, 0)
     sw = ssize = 0
     if sub:
-        ssize, sw, _ = fit([sub], fp, max_text_w, sub_h, gap_ratio)
+        ssize, sw, _ = fit([sub], ty, max_text_w, sub_h, gap_ratio)
     text_w = max(tw, sw)
     w = lead + text_w + pad if choice or sub else pad + len(slots) * (sq + pad * 2) - pad
     w = max(w, int(st["min_len_mm"] * dpmm))
     img = Image.new("L", (w, h), 255)
     d = ImageDraw.Draw(img)
-    x = pad
-    for kind, val in slots:
+    for n, (kind, val) in enumerate(slots):
+        x = pad + n * (sq + pad * 2)
+        if ty.rtl:
+            x = w - x - sq
         img.paste(qr_image(val, sq) if kind == "qr" else icon_image(val, sq), (x, pad))
-        x += sq + pad * 2
-    # Text sits centred in what is left, so a min-length label does not look lopsided.
-    tx = lead
     tbox_w = w - lead - pad
+    tx = pad if ty.rtl else lead
+    align = "right" if (ty.rtl and slots) else "center"
     if choice:
-        draw_block(d, choice, fp, size, (tx, pad, tbox_w, main_h), gap_ratio)
+        draw_block(d, choice, ty, size, (tx, pad, tbox_w, main_h), gap_ratio, align)
     if sub:
-        draw_block(d, [sub], fp, ssize, (tx, pad + main_h + pad, tbox_w, sub_h), gap_ratio)
+        draw_block(d, [sub], ty, ssize, (tx, pad + main_h + pad, tbox_w, sub_h), gap_ratio, align)
     note["lines"] = choice
     return img, note
 
 
-def render_diecut(lines, sub, icon, qr, geo, st, fp) -> tuple[Image.Image, dict]:
-    """Fixed-size label (NIIMBOT rolls, DK die-cut). Port of the niimbot-labels layouts."""
+def render_diecut(lines, sub, icon, qr, geo, st, ty: Type) -> tuple[Image.Image, dict]:
+    """Fixed-size label (NIIMBOT rolls, DK die-cut). Port of the niimbot-labels layouts, mirrored for RTL."""
     w, h = geo["canvas_w"], geo["canvas_h"]
     dpmm = geo["dpi"] / 25.4
     m = round(st["margin_mm"] * dpmm)
@@ -373,14 +457,14 @@ def render_diecut(lines, sub, icon, qr, geo, st, fp) -> tuple[Image.Image, dict]
     img = Image.new("L", (w, h), 255)
     d = ImageDraw.Draw(img)
 
-    def text_in(box):
+    def text_in(box, align="center"):
         if not lines:
             return None
         cands = [lines]
         if len(lines) == 1 and " " in lines[0]:
             cands += two_line_splits(lines[0])
-        size, use = max(((fit(c, fp, box[2], box[3], gap_ratio)[0], c) for c in cands), key=lambda t: t[0])
-        draw_block(d, use, fp, size, box, gap_ratio)
+        size, use = max(((fit(c, ty, box[2], box[3], gap_ratio)[0], c) for c in cands), key=lambda t: t[0])
+        draw_block(d, use, ty, size, box, gap_ratio, align)
         return use
 
     used = None
@@ -390,9 +474,13 @@ def render_diecut(lines, sub, icon, qr, geo, st, fp) -> tuple[Image.Image, dict]
     elif layout in ("left", "qr") and (icon or qr):
         s = min(ih, int(iw * 0.5))
         sq = qr_image(qr, s) if (layout == "qr" and qr) else icon_image(icon, s)
-        img.paste(sq, (m, m + (ih - s) // 2))
         g = round(1.5 * dpmm)
-        used = text_in((m + s + g, m, iw - s - g, ih))
+        if ty.rtl:
+            img.paste(sq, (w - m - s, m + (ih - s) // 2))
+            used = text_in((m, m, iw - s - g, ih), "right")
+        else:
+            img.paste(sq, (m, m + (ih - s) // 2))
+            used = text_in((m + s + g, m, iw - s - g, ih))
     elif layout == "icon-top" and icon:
         s = min(int(ih * 0.45), iw)
         img.paste(icon_image(icon, s), (m + (iw - s) // 2, m))
@@ -415,11 +503,22 @@ def render_label(*, text: str = "", subtext: str = "", icon: str | None = None, 
     iid = icon_id(icon, st["icon_prefix"]) if icon else None
     if not lines and not iid and not qr:
         raise DesignError("nothing to print: give text, an icon or a QR payload")
-    font = resolve_font(st["font"])
+    rtl_mode = str(st.get("rtl", "auto")).lower()
+    rtl = rtl_mode == "on" or (rtl_mode == "auto" and any(is_rtl(x) for x in lines + [subtext or ""]))
+    latin = resolve_font(st["font"])
+    hebrew = None
+    if any(is_rtl(x) for x in lines + [subtext or ""]):
+        hebrew = resolve_font(st["font_hebrew"], fallback=HEBREW_FONT)
+        if not covers_hebrew(hebrew["path"]):
+            # A Latin-only family named as the Hebrew font would print boxes: use the library default.
+            fb = resolve_font(BUILTIN_STYLE["font_hebrew"], fallback=HEBREW_FONT)
+            hebrew = {**fb, "source": f"{fb['source']} (requested {st['font_hebrew']} has no Hebrew)"}
+    ty = Type(latin["path"], (hebrew or latin)["path"], rtl)
     fn = render_continuous if geo.get("canvas_w") is None else render_diecut
-    img, note = fn(lines, subtext or "", iid, qr, geo, st, font["path"])
+    img, note = fn(lines, subtext or "", iid, qr, geo, st, ty)
     img = finish(img, st["invert"], st["border"])
     dpmm = geo["dpi"] / 25.4
     info = {"canvas_px": list(img.size), "size_mm": [round(img.width / dpmm, 1), round(img.height / dpmm, 1)],
-            "font": font, "icon": iid, **note}
-    return img, info
+            "font": latin, **({"font_hebrew": hebrew} if hebrew else {}), "icon": iid,
+            "rtl": rtl, "bidi": ("raqm" if ty.raqm else "python-bidi") if hebrew or rtl else None, **note}
+    return img, {k: v for k, v in info.items() if v is not None}

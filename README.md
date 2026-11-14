@@ -77,8 +77,14 @@ loaded tape. See [No dry run](#no-dry-run).
   ranks filled icons above outline/thin ones. Cached in `~/.cache/label-printer/icons`.
 - **Fonts:** by name, e.g. `"IBM Plex Sans Bold"` (the default) or `"Inter SemiBold"`, or a
   `.ttf` path. Resolution: installed (fontconfig) -> cache -> download (IBM Plex from IBM's
-  repository, anything else from Google Fonts) -> bundled Inter ExtraBold. Hebrew lines
-  switch to Noto Sans Hebrew.
+  repository, anything else from Google Fonts) -> bundled Inter ExtraBold. `fonts/library.json`
+  is a manifest of curated Latin and Hebrew fonts (no binaries in the repo); `scripts/fonts.py`
+  fetches and caches them.
+- **Hebrew / RTL (2.1.0):** `--rtl auto|on|off` (default `auto`: on when a line has Hebrew).
+  Lines with Hebrew use the Hebrew font (`--font-hebrew`, default Heebo Bold; Latin default is
+  IBM Plex Sans Bold; Open Sans covers both scripts). The layout mirrors: icon/QR on the right,
+  text right-aligned. Bidi and shaping use Pillow's libraqm when present, else python-bidi;
+  mixed Hebrew/Latin/digits stay in order. Complementary: [RTL-Skills](https://github.com/danielrosehill/RTL-Skills).
 - **Layouts:** on continuous media, `auto` keeps one line until the label would pass
   `wrap_mm` (85 mm), then takes the two-line split giving the shortest label; icon and QR sit
   at the left at full height. On die-cut media the icon goes left on wide labels and on top on

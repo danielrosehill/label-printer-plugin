@@ -1,0 +1,31 @@
+{
+  "_comment": "Curated label fonts, shipped as a manifest: scripts/fonts.py downloads them from Google Fonts (all SIL OFL) on first use and caches them. 'weight' is the one recommended for labels; single-weight families are 400. display_only = fine for a short word or two, poor for item names. Curated 2026-11-14.",
+  "defaults": {"latin": "IBM Plex Sans Bold", "hebrew": "Heebo Bold",
+               "pairing": "IBM Plex Sans and Heebo are both neutral grotesques with similar x-height and stroke weight at Bold, so a mixed Hebrew/Latin label reads as one face."},
+  "latin": [
+    {"family": "IBM Plex Sans", "weight": 700, "source": "ibm-plex", "use": "Default. Neutral, compact, very legible on tape."},
+    {"family": "Open Sans", "weight": 700, "source": "google", "use": "Covers Latin and Hebrew in one face; good for mixed labels.", "hebrew": true},
+    {"family": "Atkinson Hyperlegible", "weight": 700, "source": "google", "use": "Maximum legibility for small tape and distant reading."},
+    {"family": "PT Sans Narrow", "weight": 700, "source": "google", "use": "Condensed: fits long names on short labels."},
+    {"family": "Ubuntu", "weight": 700, "source": "google", "use": "Friendly humanist alternative to Plex."},
+    {"family": "Quicksand", "weight": 700, "source": "google", "use": "Rounded, soft; household and kids' labels."},
+    {"family": "Inconsolata", "weight": 700, "source": "google", "use": "Monospace for serials, asset numbers and codes."},
+    {"family": "Archivo Black", "weight": 400, "source": "google", "use": "Very heavy single weight for one-word headings.", "display_only": true},
+    {"family": "Bebas Neue", "weight": 400, "source": "google", "use": "All-caps condensed; short words, shelf and bin codes.", "display_only": true},
+    {"family": "Anton", "weight": 400, "source": "google", "use": "Heavy condensed display.", "display_only": true},
+    {"family": "Lilita One", "weight": 400, "source": "google", "use": "Playful rounded display.", "display_only": true}
+  ],
+  "hebrew": [
+    {"family": "Heebo", "weight": 700, "source": "google", "use": "Default. Clean grotesque Hebrew with matching Latin; pairs with IBM Plex Sans."},
+    {"family": "Open Sans", "weight": 700, "source": "google", "use": "Both scripts in one face; the safe choice for mixed text."},
+    {"family": "Assistant", "weight": 700, "source": "google", "use": "Slightly narrower than Heebo; fits longer words."},
+    {"family": "Rubik", "weight": 700, "source": "google", "use": "Rounded corners, friendly, strong at small sizes."},
+    {"family": "Alef", "weight": 700, "source": "google", "use": "Simple, open letterforms; very readable."},
+    {"family": "Arimo", "weight": 700, "source": "google", "use": "Arial-metric Hebrew and Latin; plain and familiar."},
+    {"family": "Secular One", "weight": 400, "source": "google", "use": "Heavy single weight; reads well big and small."},
+    {"family": "Suez One", "weight": 400, "source": "google", "use": "Heavy serif-ish display; headings.", "display_only": true},
+    {"family": "Frank Ruhl Libre", "weight": 700, "source": "google", "use": "Classic Hebrew serif; formal or traditional labels."},
+    {"family": "Fredoka", "weight": 700, "source": "google", "use": "Rounded and playful.", "display_only": true},
+    {"family": "Rubik Wet Paint", "weight": 400, "source": "google", "use": "Fun drippy effect; a word or two only.", "display_only": true}
+  ]
+}
