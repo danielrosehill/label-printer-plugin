@@ -1,0 +1,19 @@
+# niimblue-node REST server as a NIIMBOT print bridge. Template: replace <user> and the install dir.
+# Install steps: skills/niimbot-bridge-setup/SKILL.md
+[Unit]
+Description=NIIMBOT label print bridge (niimblue-node REST server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=<user>
+# The printer enumerates as a USB CDC serial port (/dev/ttyACM*), owned root:dialout.
+# Without this the server starts but /connect fails with EACCES.
+SupplementaryGroups=dialout
+WorkingDirectory=/home/<user>/niimblue-node
+ExecStart=/usr/bin/node /home/<user>/niimblue-node/node_modules/@mmote/niimblue-node/cli.mjs server -h 0.0.0.0 -p 9181
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

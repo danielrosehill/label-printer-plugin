@@ -6,14 +6,19 @@ Pillow and (optionally) qrcode; those live in render.py, which is a separate
 script precisely so that discovery and the registry keep working on a bare box.
 
 Subcommands:
-    paths                       where config and templates resolve to
+    paths                       where config, registry, styles and templates resolve to
+    repo status|set|create|commit   the user's Label-Templates repository
     discover [--json]           find label printers on this machine and LAN
     registry list|add|remove|show|set-media
-    media list|show <name>      the bundled DK/TZe catalogue
+    template list|save|show|remove
+    media list|show <name>      the bundled DK/TZe/NIIMBOT catalogue
     backends                    which print backends are usable here
 
-The registry is machine-local (~/.claude-plugins/label-printer/printers.json).
-It is never committed: it holds LAN addresses that are true on one network.
+Two registries are merged, machine entries winning on the same id:
+  machine  ~/.claude-plugins/label-printer/printers.json   USB and LAN printers true on this box only;
+           never committed
+  shared   <user-data>/label-printer/printers.json         printers reachable from every machine the
+           user has (a print hub or bridge on a VPN); `registry add --shared` writes here
 """
 
 from __future__ import annotations
@@ -57,6 +62,8 @@ def backend_for(model: str, host: str | None) -> str:
         return "zebra_wip"
     if "LABELWRITER" in m or m.startswith("LW"):
         return "dymo_wip"
+    if media_family_for(m) == "NIIMBOT":
+        return "http_bridge"  # niimblue-node bridge; see docs/niimbot.md
     return "cups"
 
 
@@ -66,6 +73,8 @@ def media_family_for(model: str) -> str | None:
         return "DK"
     if m.startswith("PT"):
         return "TZe"
+    if re.match(r"^(B1|B21|B3S|D11|D110|D101)\b", m) or "NIIMBOT" in m:
+        return "NIIMBOT"
     return None
 
 
@@ -106,15 +115,84 @@ def resolve_paths() -> dict:
     data_dir = data_root / PLUGIN
     guard(config_dir)
     guard(data_dir)
+    # The user's Label-Templates repository, when they have one, holds the shared printer
+    # registry, styles and templates. The user-data dir then only stores its path.
+    repo = None
+    cfg = data_dir / "config.json"
+    if os.environ.get("LABEL_TEMPLATES_REPO"):
+        repo = Path(os.path.expanduser(os.environ["LABEL_TEMPLATES_REPO"]))
+    elif cfg.exists():
+        try:
+            raw = json.loads(cfg.read_text()).get("label_templates_repo")
+            repo = Path(os.path.expanduser(raw)) if raw else None
+        except ValueError:
+            repo = None
+    if repo is not None and not (repo / "templates").is_dir():
+        repo = None  # configured but not cloned here: fall back rather than write into nothing
+    home_dir = repo or data_dir
     return {
         "config_dir": str(config_dir),
         "config_file": str(config_dir / "printers.json"),
         "config_source": config_source,
         "data_root": str(data_root),
         "data_dir": str(data_dir),
-        "templates": str(data_dir / "templates"),
+        "repo": str(repo) if repo else None,
+        "shared_registry": str(home_dir / "printers.json"),
+        "styles": str(home_dir / "styles.json"),
+        "templates": str(home_dir / "templates"),
         "data_source": data_source,
     }
+
+
+# --------------------------------------------------------------------------
+# the Label-Templates repository
+# --------------------------------------------------------------------------
+TEMPLATE_REPO = "danielrosehill/Label-Templates-Template"
+
+
+def repo_commit(message: str, paths: list[str] | None = None) -> dict:
+    """Commit and push changes in the user's Label-Templates repo. No-op without one."""
+    repo = resolve_paths()["repo"]
+    if not repo:
+        return {"committed": False, "reason": "no Label-Templates repo configured"}
+    paths = paths or ["printers.json", "printers.md", "styles.json", "templates"]
+    paths = [x for x in paths if (Path(repo) / x).exists()]
+    git = ["git", "-C", repo]
+    subprocess.run(git + ["add", "--", *paths], capture_output=True)
+    if subprocess.run(git + ["diff", "--cached", "--quiet"]).returncode == 0:
+        return {"committed": False, "reason": "nothing changed"}
+    c = subprocess.run(git + ["commit", "-q", "-m", message], capture_output=True, text=True)
+    if c.returncode:
+        return {"committed": False, "error": c.stderr.strip()[-300:]}
+    pu = subprocess.run(git + ["push", "-q"], capture_output=True, text=True)
+    return {"committed": True, "pushed": pu.returncode == 0, **({"push_error": pu.stderr.strip()[-300:]} if pu.returncode else {})}
+
+
+def repo_set(path: str) -> None:
+    p = Path(os.path.expanduser(path)).resolve()
+    if not (p / "templates").is_dir():
+        sys.exit(f"{p} does not look like a Label-Templates repo (no templates/)")
+    d = Path(resolve_paths()["data_dir"])
+    d.mkdir(parents=True, exist_ok=True)
+    cfg = d / "config.json"
+    data = json.loads(cfg.read_text()) if cfg.exists() else {}
+    data["label_templates_repo"] = str(p).replace(str(Path.home()), "~", 1)
+    cfg.write_text(json.dumps(data, indent=2) + "\n")
+    print(json.dumps({"written": str(cfg), **data}, indent=2))
+
+
+def repo_create(name: str, parent: str, public: bool, owner: str | None) -> None:
+    if not shutil.which("gh"):
+        sys.exit("gh (GitHub CLI) is needed to create the repo from the template")
+    full = f"{owner}/{name}" if owner else name
+    par = Path(os.path.expanduser(parent))
+    par.mkdir(parents=True, exist_ok=True)
+    r = subprocess.run(["gh", "repo", "create", full, "--template", TEMPLATE_REPO,
+                        "--public" if public else "--private", "--clone"],
+                       cwd=par, capture_output=True, text=True)
+    if r.returncode:
+        sys.exit(r.stderr.strip())
+    repo_set(str(par / name))
 
 
 # --------------------------------------------------------------------------
@@ -246,29 +324,44 @@ def _slug(s: str) -> str:
 # --------------------------------------------------------------------------
 # registry
 # --------------------------------------------------------------------------
-def load_registry() -> dict:
-    p = Path(resolve_paths()["config_file"])
-    if not p.exists():
-        return {"bridge": {"name": socket.gethostname(), "location": ""}, "printers": []}
-    with p.open() as fh:
-        return json.load(fh)
-
-
-def save_registry(reg: dict) -> str:
+def _registry_file(shared: bool = False) -> Path:
     paths = resolve_paths()
-    d = Path(paths["config_dir"])
-    d.mkdir(parents=True, exist_ok=True)
-    p = Path(paths["config_file"])
+    return Path(paths["shared_registry"] if shared else paths["config_file"])
+
+
+def load_registry(scope: str = "merged") -> dict:
+    """scope: merged (what printing uses) | machine | shared."""
+    def read(p: Path) -> dict:
+        if not p.exists():
+            return {"bridge": {"name": socket.gethostname(), "location": ""}, "printers": []}
+        with p.open() as fh:
+            return json.load(fh)
+
+    if scope != "merged":
+        return read(_registry_file(scope == "shared"))
+    machine, shared = read(_registry_file()), read(_registry_file(True))
+    ids = {p["id"] for p in machine["printers"]}
+    for p in shared["printers"]:
+        if p["id"] not in ids:
+            machine["printers"].append({**p, "scope": "shared"})
+    return machine
+
+
+def save_registry(reg: dict, shared: bool = False) -> str:
+    p = _registry_file(shared)
+    p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".json.tmp")
     with tmp.open("w") as fh:
         json.dump(reg, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
     tmp.replace(p)
+    if shared:
+        repo_commit(f"printers: update {p.name}", ["printers.json"])
     return str(p)
 
 
 def registry_add(args) -> None:
-    reg = load_registry()
+    reg = load_registry("shared" if args.shared else "machine")
     if any(p["id"] == args.id for p in reg["printers"]):
         sys.exit(f"printer id '{args.id}' already registered — use `registry remove` first")
     entry = {
@@ -287,15 +380,35 @@ def registry_add(args) -> None:
         entry["cups_queue"] = args.cups_queue
     if args.media:
         entry["installed_media"] = args.media
+    for k in ("url", "target", "bridge_type", "serial_port", "style"):
+        if getattr(args, k, None):
+            entry[k] = getattr(args, k)
+    for k in ("offset_mm", "margin_mm", "density"):
+        if getattr(args, k, None) is not None:
+            entry[k] = getattr(args, k)
+    if args.cups_option:
+        entry["cups_options"] = args.cups_option
+    if args.alias:
+        entry["aliases"] = args.alias
+    if args.default:
+        entry["default"] = True
     fam = media_family_for(args.model)
     if fam:
         entry["media_family"] = fam
     reg["printers"].append(entry)
-    print(json.dumps({"written": save_registry(reg), "printer": entry}, indent=2))
+    print(json.dumps({"written": save_registry(reg, args.shared), "printer": entry}, indent=2))
+
+
+def _scope_of(pid: str) -> bool:
+    """True if the id lives only in the shared registry."""
+    machine = {p["id"] for p in load_registry("machine")["printers"]}
+    shared = {p["id"] for p in load_registry("shared")["printers"]}
+    return pid in shared and pid not in machine
 
 
 def registry_set_media(args) -> None:
-    reg = load_registry()
+    shared = _scope_of(args.id)
+    reg = load_registry("shared" if shared else "machine")
     cat = load_catalogue()
     if args.media not in cat["products"]:
         sys.exit(f"unknown media '{args.media}' — see `labelctl.py media list`")
@@ -308,18 +421,19 @@ def registry_set_media(args) -> None:
                     f"{p['media_family']}. Loading it is physically impossible."
                 )
             p["installed_media"] = args.media
-            print(json.dumps({"written": save_registry(reg), "printer": p}, indent=2))
+            print(json.dumps({"written": save_registry(reg, shared), "printer": p}, indent=2))
             return
     sys.exit(f"no printer with id '{args.id}'")
 
 
 def registry_remove(args) -> None:
-    reg = load_registry()
+    shared = _scope_of(args.id)
+    reg = load_registry("shared" if shared else "machine")
     before = len(reg["printers"])
     reg["printers"] = [p for p in reg["printers"] if p["id"] != args.id]
     if len(reg["printers"]) == before:
         sys.exit(f"no printer with id '{args.id}'")
-    print(json.dumps({"written": save_registry(reg), "removed": args.id}, indent=2))
+    print(json.dumps({"written": save_registry(reg, shared), "removed": args.id}, indent=2))
 
 
 # --------------------------------------------------------------------------
@@ -330,52 +444,74 @@ def templates_dir() -> Path:
     return Path(resolve_paths()["templates"])
 
 
-def template_save(args) -> None:
+def _find_template(name: str) -> Path:
+    """'shelf-bin' or 'ptouch-24mm/shelf-bin'; folders are optional when the name is unique."""
     d = templates_dir()
+    parts = name.split("/")
+    if len(parts) > 1:
+        p = d / _slug(parts[0]) / f"{_slug(parts[-1])}.json"
+        if p.exists():
+            return p
+    hits = sorted(d.rglob(f"{_slug(parts[-1])}.json")) if d.is_dir() else []
+    if not hits:
+        sys.exit(f"no template '{name}' under {d}")
+    if len(hits) > 1:
+        sys.exit(f"template '{name}' is ambiguous: " + ", ".join(str(h.relative_to(d)) for h in hits)
+                 + " - name it as folder/name")
+    return hits[0]
+
+
+def template_save(args) -> None:
+    folder = _slug(args.folder or args.printer or args.media or "general")
+    d = templates_dir() / folder
     d.mkdir(parents=True, exist_ok=True)
     tpl = {
         "name": args.name,
+        "description": args.description or "",
         "text": args.text,
         "subtext": args.subtext or "",
         "qr": args.qr or "",
+        "icon": args.icon or "",
+        "layout": args.layout or "",
+        "style": args.style or "",
         "media": args.media or "",
         "printer": args.printer or "",
-        "description": args.description or "",
+        "copies": args.copies or 0,
     }
+    tpl = {k: v for k, v in tpl.items() if v or k in ("name", "text")}
     p = d / f"{_slug(args.name)}.json"
     with p.open("w") as fh:
         json.dump(tpl, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
-    print(json.dumps({"written": str(p), "template": tpl}, indent=2))
+    res = {"written": str(p), "template": tpl}
+    if not args.no_commit:
+        res["repo"] = repo_commit(f"templates: save {folder}/{p.stem}", ["templates"])
+    print(json.dumps(res, indent=2, ensure_ascii=False))
 
 
 def template_list() -> None:
     d = templates_dir()
     out = []
     if d.is_dir():
-        for p in sorted(d.glob("*.json")):
+        for p in sorted(d.rglob("*.json")):
             with p.open() as fh:
                 t = json.load(fh)
-            out.append({"file": str(p), "name": t.get("name"),
-                        "description": t.get("description", ""),
-                        "text": t.get("text", "")})
-    print(json.dumps({"templates_dir": str(d), "count": len(out), "templates": out}, indent=2))
+            out.append({"id": str(p.relative_to(d).with_suffix("")), "name": t.get("name"),
+                        "description": t.get("description", ""), "text": t.get("text", ""),
+                        "icon": t.get("icon", ""), "printer": t.get("printer", ""), "media": t.get("media", "")})
+    print(json.dumps({"templates_dir": str(d), "repo": resolve_paths()["repo"], "count": len(out),
+                      "templates": out}, indent=2, ensure_ascii=False))
 
 
 def template_show(name: str) -> dict:
-    p = templates_dir() / f"{_slug(name)}.json"
-    if not p.exists():
-        sys.exit(f"no template '{name}' at {p}")
-    with p.open() as fh:
+    with _find_template(name).open() as fh:
         return json.load(fh)
 
 
 def template_remove(name: str) -> None:
-    p = templates_dir() / f"{_slug(name)}.json"
-    if not p.exists():
-        sys.exit(f"no template '{name}' at {p}")
+    p = _find_template(name)
     p.unlink()
-    print(json.dumps({"removed": str(p)}, indent=2))
+    print(json.dumps({"removed": str(p), "repo": repo_commit(f"templates: remove {p.stem}", ["templates"])}, indent=2))
 
 
 # --------------------------------------------------------------------------
@@ -390,6 +526,7 @@ def backends() -> dict:
             return False
 
     return {
+        "uv": bool(shutil.which("uv")),
         "brother_ql": bool(shutil.which("brother_ql")),
         "ptouch-print": bool(shutil.which("ptouch-print")),
         "cups_lp": bool(shutil.which("lp")),
@@ -397,6 +534,8 @@ def backends() -> dict:
         "qrencode": bool(shutil.which("qrencode")),
         "python_pillow": have("PIL"),
         "python_qrcode": have("qrcode"),
+        "python_resvg": have("resvg_py"),
+        "fontconfig": bool(shutil.which("fc-match")),
         "notes": {
             "zebra": "ZPL backend not implemented yet — see docs/backends.md",
             "dymo": "DYMO backend not implemented yet — see docs/backends.md",
@@ -429,6 +568,18 @@ def main() -> None:
     a.add_argument("--usb-id", dest="usb_id")
     a.add_argument("--cups-queue", dest="cups_queue")
     a.add_argument("--media")
+    a.add_argument("--url", help="http_bridge / print_hub base URL")
+    a.add_argument("--target", help="print_hub target id or alias")
+    a.add_argument("--bridge-type", dest="bridge_type", choices=["ptouch", "niimblue"])
+    a.add_argument("--serial-port", dest="serial_port", help="niimblue bridge: serial path on the bridge host")
+    a.add_argument("--offset-mm", dest="offset_mm", type=float, help="die-cut print-position calibration, negative = left")
+    a.add_argument("--margin-mm", dest="margin_mm", type=float)
+    a.add_argument("--density", type=int)
+    a.add_argument("--style", help="default style for this printer")
+    a.add_argument("--cups-option", dest="cups_option", action="append", help="extra lp -o option, repeatable")
+    a.add_argument("--alias", action="append", help="another name for --printer, repeatable")
+    a.add_argument("--default", action="store_true", help="use when --printer is omitted")
+    a.add_argument("--shared", action="store_true", help="write to the shared (user-data) registry")
     rm = r.add_parser("remove")
     rm.add_argument("--id", required=True)
     sm = r.add_parser("set-media")
@@ -440,6 +591,18 @@ def main() -> None:
     ms = m.add_parser("show")
     ms.add_argument("name")
 
+    rp = sub.add_parser("repo").add_subparsers(dest="pcmd", required=True)
+    rp.add_parser("status")
+    rs = rp.add_parser("set")
+    rs.add_argument("path")
+    rc = rp.add_parser("create")
+    rc.add_argument("--name", default="Label-Templates")
+    rc.add_argument("--dir", required=True, help="parent directory to clone into")
+    rc.add_argument("--owner", help="GitHub user/org; default: the gh account")
+    rc.add_argument("--public", action="store_true", help="default is private")
+    rm2 = rp.add_parser("commit")
+    rm2.add_argument("-m", "--message", default="label-printer: update")
+
     t = sub.add_parser("template").add_subparsers(dest="tcmd", required=True)
     t.add_parser("list")
     ts = t.add_parser("save")
@@ -447,9 +610,15 @@ def main() -> None:
     ts.add_argument("--text", required=True)
     ts.add_argument("--subtext")
     ts.add_argument("--qr")
+    ts.add_argument("--icon")
+    ts.add_argument("--layout")
+    ts.add_argument("--style")
+    ts.add_argument("--copies", type=int)
     ts.add_argument("--media")
     ts.add_argument("--printer")
     ts.add_argument("--description")
+    ts.add_argument("--folder", help="templates/<folder>/; default: the printer id, else the media, else general")
+    ts.add_argument("--no-commit", action="store_true", help="don't commit/push the Label-Templates repo")
     tsh = t.add_parser("show")
     tsh.add_argument("name")
     trm = t.add_parser("remove")
@@ -472,6 +641,20 @@ def main() -> None:
             registry_remove(args)
         elif args.rcmd == "set-media":
             registry_set_media(args)
+    elif args.cmd == "repo":
+        if args.pcmd == "status":
+            paths = resolve_paths()
+            st = ""
+            if paths["repo"]:
+                st = subprocess.run(["git", "-C", paths["repo"], "status", "-sb"], capture_output=True, text=True).stdout
+            print(json.dumps({"repo": paths["repo"], "git": st.strip(), "styles": paths["styles"],
+                              "shared_registry": paths["shared_registry"], "templates": paths["templates"]}, indent=2))
+        elif args.pcmd == "set":
+            repo_set(args.path)
+        elif args.pcmd == "create":
+            repo_create(args.name, args.dir, args.public, args.owner)
+        else:
+            print(json.dumps(repo_commit(args.message), indent=2))
     elif args.cmd == "template":
         if args.tcmd == "list":
             template_list()

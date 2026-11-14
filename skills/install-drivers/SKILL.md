@@ -1,6 +1,6 @@
 ---
 name: install-drivers
-description: Install the Linux tooling label printing needs — brother_ql, ptouch-print, CUPS drivers, mDNS discovery and the Python rendering libraries.
+description: Install the Linux tooling label printing needs — uv, brother_ql, ptouch-print, CUPS drivers, mDNS discovery and the Python rendering libraries (Pillow, resvg-py, qrcode).
 ---
 
 # Install label printer drivers on Linux
@@ -22,7 +22,10 @@ command's exit code.
 | `avahi-browse` | discovering networked printers | discovery finds nothing on the LAN and looks like an empty network |
 | `brother_ql` | printing to Brother **QL** series | no DK label printing |
 | `ptouch-print` | printing to Brother **PT** (P-touch) series | no TZe tape printing |
+| `uv` | running `render.py` with its Python deps (Pillow, resvg-py, qrcode) installed on the fly | install those into python3 yourself |
 | `python_pillow` | rendering any label at all | nothing prints |
+| `python_resvg` | drawing Iconify icons | text-only labels |
+| `fontconfig` | finding installed fonts by name | fonts are downloaded to the cache instead |
 | `python_qrcode` or `qrencode` | QR labels | text labels still work |
 | `cups_lp` | printers reached through a CUPS queue | only matters for the `cups` backend |
 

@@ -10,11 +10,11 @@ QR can be printed perfectly and still be useless, and neither the printer nor th
 render will tell you.
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/render.py" preview \
+uv run -q --script "${CLAUDE_PLUGIN_ROOT}/scripts/render.py" preview \
   --text "A-100" --subtext "Instant Pot" \
   --qr "https://inventory.example/a/100" --printer ql-810w -o /tmp/label.png
 
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/render.py" print \
+uv run -q --script "${CLAUDE_PLUGIN_ROOT}/scripts/render.py" print \
   --text "A-100" --subtext "Instant Pot" \
   --qr "https://inventory.example/a/100" --printer ql-810w
 ```
@@ -62,7 +62,7 @@ unidentifiable when the code will not scan, which is exactly when you need to
 know what it was.
 
 - `--text` is the large line — the id, the thing you read across a room.
-- `--subtext` is the small line — the name, dropped automatically below ~18 mm.
+- `--subtext` is the small line — the name, dropped automatically on 12 mm tape and narrower.
 
 ## Generating a QR on its own
 

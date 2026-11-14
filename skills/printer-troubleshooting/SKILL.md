@@ -1,6 +1,6 @@
 ---
 name: printer-troubleshooting
-description: Diagnose why a label did not print — printer unreachable, powered off, media errors, wrong tape width, or bridge connectivity. Use when a print tool fails, printer_status reports not ok, or the user says the printer isn't working.
+description: Diagnose why a label did not print — printer unreachable, powered off, accepted-but-nothing-printed, media errors, wrong tape width, or bridge/hub connectivity. NIIMBOT bridges: niimbot-bridge-setup. Use when a print tool fails, printer_status reports not ok, or the user says the printer isn't working.
 ---
 
 # Printer troubleshooting
@@ -25,10 +25,22 @@ printer's NVRAM, so it is a one-time job. It is *not* reachable from Linux by an
 route — not `ptouch-print`, not Bluetooth, not the mobile apps, and not under Wine.
 See [`docs/linux-printer-settings.md`](../../docs/linux-printer-settings.md).
 
-## 2. The bridge is unreachable
+## 2. Accepted, but nothing came out
 
-An error mentioning `bridge unreachable` means the MCP cannot reach the print bridge —
-the printer itself may be perfectly fine.
+`render.py print` said `printed: true` (or a hub job went `done`), and no label emerged.
+The backend only knows the job was delivered; a P-touch can take a job, report no error
+and still print nothing. Seen with: the Brother phone app holding the printer over
+Bluetooth (jobs silently dropped), the printer dropping off USB minutes later, a cover
+not fully closed. Ask the user to power-cycle and replug, close any phone app, check the
+cassette, then preview (which reads live status) and print **one** short test label
+before re-sending the real ones. Never re-send the whole run blind.
+
+## 3. The bridge or hub is unreachable
+
+An error mentioning `unreachable` means this machine cannot reach the print bridge or hub;
+the printer itself may be fine.
+
+- For `http_bridge` / `print_hub` printers: `curl -s <url>/health` (bridge) or `<url>/targets` (hub).
 
 - Confirm `PRINT_BRIDGE_URL` points at the right host and port (default `:9180`).
 - On the bridge host: `systemctl status <bridge-service>` and
@@ -36,7 +48,7 @@ the printer itself may be perfectly fine.
 - If the bridge and the MCP are on different machines, check the network path between
   them before touching the printer.
 
-## 3. `LIBUSB_ERROR_ACCESS` — permissions, not hardware
+## 4. `LIBUSB_ERROR_ACCESS` — permissions, not hardware
 
 If `/health` returns `ok: false` with the printer **found** but not openable:
 
@@ -76,7 +88,7 @@ suspect exactly this.
 Note this failure is **port-independent**, so a recent cable move is a red herring — the
 rule matches on vendor/product, not on the port.
 
-## 4. Media errors
+## 5. Media errors
 
 `printer_status` surfaces the printer's error word.
 
@@ -95,12 +107,12 @@ every job, the driver needs patching rather than the printer needing tape. The p
 and the full write-up are in
 [ptouch-cube-print-bridge](https://github.com/danielrosehill/ptouch-cube-print-bridge).
 
-## 5. Layout looks wrong
+## 6. Layout looks wrong
 
-- **Subtext missing?** Tape narrower than 18 mm has no room for a second line and it is
-  dropped deliberately. Check `tapeMm` in `printer_status`.
-- **Label far longer than expected?** A heading too wide to shrink legibly widens the
-  label instead. Shorten the heading, or move the detail into `subtext`.
+- **Subtext missing?** Tape of 12 mm and narrower has no room for a smaller second line and it is
+  dropped deliberately (render.py says so in `subtext_dropped`). Check `tapeMm` in `printer_status`.
+- **Label far longer than expected?** Check `wrapped` / `lines` in the JSON; lower the
+  style's `wrap_mm`, or force `--layout two-line`.
 - **Blank tape before the label?** The print head sits ~25 mm behind the cutter. The
   bridge trims this with `--precut`; if you are seeing it, `--precut` is not being passed.
 

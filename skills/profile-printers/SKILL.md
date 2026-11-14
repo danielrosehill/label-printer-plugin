@@ -1,6 +1,6 @@
 ---
 name: profile-printers
-description: Find label printers on this machine and LAN and record them in a local registry with a name, id and description so later prints can pick one.
+description: Find label printers on this machine and LAN and record them in the registry (machine-local, or shared in the Label-Templates repo) with a name, id, backend and description so later prints can pick one.
 ---
 
 # Profile the label printers
@@ -8,9 +8,13 @@ description: Find label printers on this machine and LAN and record them in a lo
 Builds the registry every other skill reads. Run it once per machine, and again
 whenever a printer moves network, gets replaced, or a second one appears.
 
-The registry is **machine-local** — it lives in the vault, not the user-data
-root, because it holds LAN addresses that are true on one network only. Ask the
-resolver rather than hard-coding the path:
+Two registries, merged at print time: the **machine** registry
+(`~/.claude-plugins/label-printer/printers.json`, USB and LAN printers true on one box)
+and the **shared** one in the user's Label-Templates repo (`printers.json`, printers every
+machine reaches, e.g. through a print hub; write it with `registry add --shared`). Record
+every printer in the repo's `printers.md` too. NIIMBOT printers aren't discoverable here:
+they sit behind a niimblue-node bridge (`niimbot-bridge-setup`). Ask the resolver for
+the paths rather than hard-coding them:
 
 ```bash
 sh "${CLAUDE_PLUGIN_ROOT}/scripts/paths.sh" --json
@@ -68,7 +72,7 @@ discovered values as defaults. Do not interrogate them field by field.
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/labelctl.py" registry add \
-  --id ql-810w --model QL-810W --host 192.168.68.63 \
+  --id ql-810w --model QL-810W --host 192.0.2.10 \
   --name "Brother QL-810W" \
   --description "Office shelf, die-cut DK rolls" \
   --media DK-22210

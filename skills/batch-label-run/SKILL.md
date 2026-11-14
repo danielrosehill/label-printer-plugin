@@ -5,8 +5,19 @@ description: Print many different labels in one run — a whole shelf of boxes, 
 
 # Batch label run
 
-`print_batch` takes up to 50 different labels and prints them in order, each cut
-separately. Use it instead of calling the single-label tools in a loop.
+Two routes:
+
+- **Any registered printer (scripts):** one `render.py print` per distinct label, with
+  `-n` for its copies, in the order of the list. Same flags as `design-label`; a saved
+  template keeps the per-row command short (`--template box --text "S-014"`).
+- **The bundled MCP server (P-touch bridge setups):** `print_batch` takes up to 50
+  different labels and prints them as one job, so the ~25 mm leader is paid once.
+
+```bash
+R='uv run -q --script ${CLAUDE_PLUGIN_ROOT}/scripts/render.py'
+$R preview -p ptouch --template box --text "S-014 Cables" -o /tmp/longest.png   # the longest row first
+$R print   -p ptouch --template box --text "S-014 Cables" -n 2
+```
 
 ## Shape
 
@@ -31,10 +42,11 @@ Batch runs are where tape gets wasted, so spend a moment first.
    **cannot** report remaining tape — ask the user to eyeball the cassette before a
    long run.
 2. **Preview one representative label**, especially the longest name in the set, with
-   `preview_label`. One bad layout repeated thirty times is thirty wasted labels.
+   `render.py preview` (or `preview_label` on the MCP route). One bad layout repeated thirty times is thirty wasted labels.
 3. **Show the user the list and get a yes.** Print the headings and copy counts as a
    table. This is a physical, irreversible, consumable action — confirm it.
-4. Check `printer_status` immediately before starting.
+4. Check the printer is up immediately before starting (`printer_status`, or a
+   `preview` against a bridge/hub printer, which reports its live tape).
 
 ## When it fails partway
 

@@ -1,27 +1,26 @@
 # label-printer-plugin
 
-Print labels on **Brother QL and P-touch** label printers from Claude Code — text and
-QR labels, at the size of whatever roll is loaded, on whichever printer you name.
+Design and print labels from Claude Code. Say "four labels for the wine bottles with a wine
+icon" and it picks a filled icon, sets the text in your font, wraps it to a compact layout
+sized to whatever tape or roll is loaded, previews it, and sends it to the printer by
+whatever route reaches it: CUPS, `ptouch-print`, `brother_ql`, a USB print bridge, or a
+LAN print hub.
 
-There are two ways to use this, and they are independent.
-
-**Standalone (default).** Nothing to deploy. The plugin discovers printers on this
-machine and the LAN, keeps a registry of them, renders labels itself and sends them
-straight to the printer.
-
-```
-Claude Code ──▶ scripts/render.py ──raw TCP :9100──▶ Brother QL
-                (renders PNG)     └─USB via ptouch-print──▶ Brother P-touch
-```
-
-**Via the bundled MCP server.** The older path, still supported: a streamable-HTTP MCP
-that renders labels and posts them to a small USB print bridge. P-touch only, and it
-needs the bridge deployed first — see [Running the MCP server](#running-the-mcp-server).
+Brother QL (DK rolls), Brother P-touch (TZe tape) and NIIMBOT (die-cut rolls) are covered
+with real media geometry; anything with a CUPS queue works through `cups`.
 
 ```
-Claude Code ──MCP──▶ label-printer ──HTTP──▶ print bridge ──USB──▶ Brother P-touch
-                     (renders PNG)           (:9180)               (24mm tape)
+           design layer                         backend layer (per printer)
+"4 labels, wine icon" ─▶ render.py ─▶ PNG ─┬─▶ cups         lp -d <queue>
+  icon: Iconify, cached     │              ├─▶ ptouch_usb   ptouch-print (USB)
+  font: by name, fetched    │              ├─▶ brother_ql   TCP 9100 / USB
+  layout: one/two-line,     │              ├─▶ http_bridge  ptouch-print or niimblue-node bridge
+  icon-top, QR              │              └─▶ print_hub    LAN Print Hub (queues + routes)
+  media: live from printer ─┘
 ```
+
+Your printers, styles and saved labels live in a **Label-Templates** repository of your
+own, created from [Label-Templates-Template](https://github.com/danielrosehill/Label-Templates-Template).
 
 ## Quick start
 
@@ -32,108 +31,122 @@ Claude Code ──MCP──▶ label-printer ──HTTP──▶ print bridge �
 
 Then, in Claude Code:
 
-> find my label printers
+> set up label printing
 
-> print a label saying "Spare fuses / Garage shelf B" with a QR to https://inv.example/a/42
+> print me two labels saying "Flat Ethernet Cable" with an ethernet icon
 
-Or drive the scripts directly:
+> save that as a template
+
+Or drive the scripts directly (`uv` installs the Python deps on the fly):
 
 ```bash
-python3 scripts/labelctl.py discover
-python3 scripts/labelctl.py registry add --id ql-810w --model QL-810W \
-  --host 192.168.68.63 --description "Office shelf" --media DK-22210
-python3 scripts/render.py preview --text "Spare fuses" --qr https://inv.example/a/42 -o /tmp/l.png
-python3 scripts/render.py print   --text "Spare fuses" --qr https://inv.example/a/42
+R="uv run -q --script scripts/render.py"
+$R icons search wine                                         # filled icons first
+$R preview -t "Wine Bottles" -i mdi:glass-wine -m 24mm -o /tmp/l.png   # design only, no printer
+$R preview -p ptouch -t "Wine Bottles" -i mdi:glass-wine -o /tmp/l.png # sized to the loaded tape
+$R print   -p ptouch -t "Wine Bottles" -i mdi:glass-wine -n 4
+$R font "Inter SemiBold"                                     # resolves, downloads if missing
+python3 scripts/labelctl.py template save --name wine --printer ptouch --text "Wine Bottles" --icon mdi:glass-wine
 ```
 
-`preview` never opens a socket to the printer — see [No dry run](#no-dry-run).
+`preview` never sends a job; for bridge and hub printers it reads their status to learn the
+loaded tape. See [No dry run](#no-dry-run).
 
 ## Skills
 
 | Skill | Purpose |
 |---|---|
-| `profile-printers` | Find label printers and register them with a name and description |
-| `print-label` | Print a label at a chosen media size |
-| `qr-labels` | Print a label carrying a QR code |
-| `label-templates` | Save a label you print repeatedly, and print from it |
-| `install-drivers` | Install the Linux tooling — `brother_ql`, `ptouch-print`, mDNS, CUPS |
-| `label-an-asset` | Tag one item — asset number, name, QR to its page *(MCP)* |
-| `label-a-storage-unit` | Tag a box, bin or shelf *(MCP)* |
-| `batch-label-run` | Label a whole shelf, or generate labels from a CSV *(MCP)* |
-| `printer-troubleshooting` | Nothing printed — work out why |
+| `design-label` | Request -> icon, font, layout -> preview -> print. The main entry point |
+| `setup` | Create the Label-Templates repo, register printers and backends, set the default style |
+| `print-label` | Print through the printer's backend; what `printed` does and doesn't prove |
+| `label-templates` | Save a label you reprint, list them, print from one (committed to your repo) |
+| `qr-labels` | Labels carrying a QR code |
+| `batch-label-run` | Many different labels in one run, or from a CSV |
+| `profile-printers` | Discover USB, mDNS and CUPS label printers |
+| `niimbot-bridge-setup` | Run a niimblue-node bridge for a NIIMBOT printer |
+| `install-drivers` | uv, `brother_ql`, `ptouch-print`, mDNS, CUPS, Python libs |
+| `label-an-asset`, `label-a-storage-unit` | Asset and storage tags *(MCP)* |
+| `printer-troubleshooting` | Nothing printed: work out why |
 
 `/label` routes to any of them.
 
+## Design
+
+- **Icons:** any [Iconify](https://iconify.design) id (`mdi:ethernet`); a bare name uses the
+  style's `icon_prefix` (default `mdi`, whose icons are filled and print solid). `icons search`
+  ranks filled icons above outline/thin ones. Cached in `~/.cache/label-printer/icons`.
+- **Fonts:** by name, e.g. `"IBM Plex Sans Bold"` (the default) or `"Inter SemiBold"`, or a
+  `.ttf` path. Resolution: installed (fontconfig) -> cache -> download (IBM Plex from IBM's
+  repository, anything else from Google Fonts) -> bundled Inter ExtraBold. Hebrew lines
+  switch to Noto Sans Hebrew.
+- **Layouts:** on continuous media, `auto` keeps one line until the label would pass
+  `wrap_mm` (85 mm), then takes the two-line split giving the shortest label; icon and QR sit
+  at the left at full height. On die-cut media the icon goes left on wide labels and on top on
+  squarer ones. `one-line`, `two-line`, `text`, `icon`, `icon-top`, `qr` force one.
+- **Styles:** named bundles of those settings in your repo's `styles.json`; one is the default.
+
 ## Printer support
 
-| Backend | Models | Transport | Status |
+| Backend | Printers | Transport | Status |
 |---|---|---|---|
-| `brother_ql_network` | Brother QL-500 … QL-1060N | raw TCP `:9100` | working |
+| `cups` | anything with a CUPS queue | `lp -d` (+ `cups_options`) | working |
+| `brother_ql_network` | Brother QL-500 … QL-1060N | raw TCP `:9100` | working, verified 2026-08-16 on a QL-810W |
 | `brother_ql_usb` | same, over USB | `brother_ql -b pyusb` | working |
 | `ptouch_usb` | Brother PT (P-touch) | `ptouch-print` | working |
-| `cups` | anything with a CUPS queue | `lp -d` | working |
-| `zebra_wip` | Zebra ZD/ZT/GK/GX/ZQ | — | **discovered and registered, not yet printable** |
-| `dymo_wip` | DYMO LabelWriter | — | **discovered and registered, not yet printable** |
+| `http_bridge` (`bridge_type: ptouch`) | P-touch on another machine | POST to a [ptouch-print bridge](https://github.com/danielrosehill/ptouch-cube-print-bridge) | matches the bridge API; not yet printed end to end from this script |
+| `http_bridge` (`bridge_type: niimblue`) | NIIMBOT B1/B21/D11… | [niimblue-node](https://github.com/MultiMote/niimblue-node) REST server | ported from code that printed on a B1; this path not yet printed end to end |
+| `print_hub` | anything behind a [LAN Print Hub](https://github.com/danielrosehill/LAN-Print-Hub) target | POST PNG to `/jobs` | live status verified 2026-11-14 (P-touch and NIIMBOT targets); PNG submit matches the hub's API, not yet printed end to end |
+| `zebra_wip`, `dymo_wip` | Zebra, DYMO | — | discovered and registered, not yet printable |
 
-Verified end to end 2026-08-16 against a **Brother QL-810W** over the network, on
-Ubuntu with `brother_ql` 0.9.4 and Pillow 12.1.1. Printing to a `*_wip` backend fails
-with an explicit message rather than attempting anything. What a Zebra backend would
-involve is sketched in [`docs/backends.md`](docs/backends.md).
+Bridge and hub tape printers report the loaded tape (`tapeMm`, `maxPx`), and that wins over
+the registry, so a 12 mm cassette swapped in for the usual 24 mm renders correctly.
 
 ## Where things are stored
 
-Two locations, deliberately separate. Ask `scripts/paths.sh --json` rather than
-hard-coding either.
-
 | | Path | Committed? |
 |---|---|---|
-| **Printer registry** — LAN addresses, true on one network | `~/.claude-plugins/label-printer/printers.json` | never |
-| **Templates** — labels you reuse, worth mirroring | `<user-data-root>/label-printer/templates/` | yes, in your own repo |
+| **Label-Templates repo**: `printers.md` + `printers.json` (shared registry), `styles.json`, `templates/<printer-or-media>/` | your own repo, from the template | yes; the scripts commit and push on save |
+| **Pointer to it** | `<user-data-root>/label-printer/config.json` (`label_templates_repo`) | in your user-data repo |
+| **Machine registry**: USB/LAN printers true on one box | `~/.claude-plugins/label-printer/printers.json` | never |
+| **Icon and font cache** | `~/.cache/label-printer/` | no |
 
-The user-data root is `$CLAUDE_USER_DATA`, else whichever of `~/.claude-user-data` or
-`~/.local/share/claude-plugins` already exists, else `~/.claude-user-data`. It adopts an
-existing root rather than starting a second one, and reports which rule fired.
+`labelctl.py repo status` (or `scripts/paths.sh --json`) shows where everything resolves.
+Without a repo, styles and templates fall back to the user-data dir. The user-data root is
+`$CLAUDE_USER_DATA`, else whichever of `~/.claude-user-data` or
+`~/.local/share/claude-plugins` already exists, else `~/.claude-user-data`.
 
 ## Media
 
-`reference/media-catalogue.json` carries DK and TZe product codes with their pixel
-geometry — 24 DK geometries and 7 TZe widths, plus the product codes that map onto
-them.
+`reference/media-catalogue.json` carries DK, TZe and NIIMBOT product codes with their pixel
+geometry. `--media` also takes `24mm` (tape) and `40x30` (NIIMBOT).
 
 ```bash
 python3 scripts/labelctl.py media list
-python3 scripts/labelctl.py media show DK-11202
+python3 scripts/labelctl.py media show NIIMBOT-40x30
 ```
 
-The registry records which roll is loaded, and that decides the canvas. **Continuous**
-rolls grow to fit the text, capped at 90 mm; **die-cut** labels are a fixed length and
-text shrinks to fit. An `installed_media` that does not match the physical roll produces
-a wrongly-sized label rather than an error.
+**Continuous** media grows with the text; **die-cut** labels are a fixed size and text
+shrinks to fit. A recorded media that doesn't match the physical roll produces a
+wrongly-sized label rather than an error; live-reporting printers avoid that.
 
 ## No dry run
 
 `brother_ql print` converts *and* transmits in a single step. There is no dry-run flag,
 and `--no-cut` suppresses the cutter, not the print. So `render.py preview` is a pure
-Pillow path that never opens a socket — it is the only safe way to see a label before
-spending media. Its output always carries `"printed": false`.
+rendering path that never sends a job; its output always carries `"printed": false`.
+
+`"printed": true` on a real print means the backend accepted the job. Tape printers can
+accept a job and print nothing (cover, phone app holding the printer, a USB drop), so the
+skills ask whether a label came out instead of assuming it.
 
 Other findings that cost time to work out — `brother_ql discover` being USB-only and
 broken without `-b`, networked label printers not appearing in CUPS at all, the
 harmless deprecation warning on every invocation — are in
-[`docs/backends.md`](docs/backends.md).
+[`docs/backends.md`](docs/backends.md). NIIMBOT facts and lessons: [`docs/niimbot.md`](docs/niimbot.md).
 
-## Label layout
+## Label layout (MCP path)
 
-Both renderers put the QR square on the left, the heading in large bold type, and an
-optional second line beneath it. Tape narrower than about 18 mm drops the second line —
-there is no room for it.
-
-The standalone renderer sizes the canvas from the loaded media and caps a continuous
-label at 90 mm, shrinking type to fit rather than stretching the roll. On die-cut media
-the QR is additionally capped at 45% of the label length so it cannot squeeze the text
-into a sliver.
-
-The rest of this section describes the **MCP renderer**, whose behaviour differs:
+The bundled MCP server (below) has its own renderer. The rest of this section describes the **MCP renderer**, whose behaviour differs:
 
 QR labels are a uniform **62 mm** along the tape: QR square on the left, heading in
 large bold type, optional second line beneath it. Long names **wrap to two lines**
@@ -280,6 +293,12 @@ figure: **[`docs/linux-printer-settings.md`](docs/linux-printer-settings.md)**.
 
 ## Tested on
 
+**Design + hub path (2.0)** — Brother **PT-P710BT** on 24 mm TZe and a **NIIMBOT B1** on
+40x30 rolls, both through a LAN Print Hub, 2026-11-14 (labels rendered by this plugin's
+design layer were previewed against the live printers, which reported their loaded media. Real
+prints that day went through the hub's own renderer, whose tape layout this one ports; a
+first real print through `render.py print` on these backends is still to be done).
+
 **Standalone path** — Brother **QL-810W** over the network (`brother_ql_network`,
 `tcp://…:9100`), DK-22210 continuous and DK-11202 die-cut, on Ubuntu with `brother_ql`
 0.9.4, Python 3.14 and Pillow 12.1.1. Verified end to end 2026-08-16: mDNS discovery,
@@ -290,6 +309,19 @@ code path but no hardware was on hand for them.
 `ptouch-print v1.8`, Ubuntu. `ptouch-print` also supports PT-P700, PT-P750W, PT-D460BT,
 PT-D610BT, PT-E550W, PT-P900Wc and others — the rendering there is model-independent,
 but only the P710BT has been exercised end to end.
+
+## History
+
+- **2.0.0 (2026-11-14):** design layer (Iconify icons with search, fonts by name with
+  download, auto two-line wrap, styles), pluggable backends (`http_bridge`, `print_hub`
+  added; live tape detection), NIIMBOT media, and the per-user Label-Templates repo
+  ([template](https://github.com/danielrosehill/Label-Templates-Template)). Folded in the
+  private `niimbot-labels` plugin (NIIMBOT renderer layouts, niimblue-node bridge setup,
+  hardware notes), whose repo was then deleted. The icon + text tape layout comes from
+  [LAN Print Hub](https://github.com/danielrosehill/LAN-Print-Hub)'s renderer.
+  `lan-print-scan` keeps documents, scanning and hub transport, and defers label design here.
+- **1.x (2026-08 to 2026-11):** Brother QL/P-touch discovery, registry, DK/TZe catalogue,
+  QR labels, templates, and the original P-touch MCP server.
 
 ## License
 

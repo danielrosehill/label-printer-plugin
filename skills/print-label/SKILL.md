@@ -1,100 +1,78 @@
 ---
 name: print-label
-description: Print a label on a registered printer at a chosen media size, with an optional second line. Previews first when the layout is uncertain.
+description: Print a label on a registered printer through its backend (CUPS, ptouch-print, brother_ql, a USB print bridge or a LAN print hub), at the size of the loaded media. Use on "print a label", "print it", "send that to the P-touch". For how the label should look (icon, font, two lines) use design-label first.
 ---
 
 # Print a label
 
-Works against the registry that `profile-printers` built, so it is
-printer-agnostic: pick a printer by id, or let it pick when only one is
-registered.
-
-## Before printing
-
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/labelctl.py" registry list
+R='uv run -q --script ${CLAUDE_PLUGIN_ROOT}/scripts/render.py'
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/labelctl.py" registry list    # empty -> run `setup`
 ```
 
-If the registry is empty, run `profile-printers` first — do not guess an
-address.
+Read `printers.md` in the user's Label-Templates repo (`labelctl.py repo status` finds it)
+before the first print of a session. Printers are picked with `-p <id or alias>`; omitted, the registry's `default` (or its
+only printer) is used. Nothing registered: run `setup`, never guess an address.
 
 ## Preview, then print
 
-**`preview` never opens a socket to the printer.** That separation is
-load-bearing: `brother_ql print` converts *and* transmits in one step with no
-dry-run flag, so the only safe way to see a label before spending media is to
-render it and stop.
-
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/render.py" preview \
-  --text "Spare fuses" --subtext "Garage shelf B" --printer ql-810w -o /tmp/label.png
+$R preview -p ptouch -t "Spare fuses" --subtext "Garage shelf B" -o /tmp/label.png
+$R print   -p ptouch -t "Spare fuses" --subtext "Garage shelf B" -n 2
 ```
 
-Read the PNG back and look at it when the layout is uncertain — a long heading,
-non-Latin text, or an unfamiliar media size. For routine labels skip straight to
-printing; a preview the user did not ask for is a round trip they did not want.
+**`preview` never sends a job.** For bridge and hub printers it does read the printer's
+status to learn the loaded tape (`--no-live` skips that). Read the PNG back when the
+layout is new; skip it for a repeat the user already approved.
 
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/render.py" print \
-  --text "Spare fuses" --subtext "Garage shelf B" --printer ql-810w --copies 2
-```
+The JSON's `printed` is what the backend acknowledged. `printed: false` means nothing
+was sent or the backend refused it. `printed: true` still isn't proof of a label: say
+"sent", and ask if it came out on a first print or after trouble.
 
-Both commands print a JSON object with a `printed` field. `printed: false` means
-nothing was sent — do not report a preview as a completed print.
+## Backends (set per printer in the registry)
 
-## Choosing the media size
+| backend | Path |
+|---|---|
+| `cups` | `lp -d <cups_queue>` plus any `cups_options`. The generic default |
+| `ptouch_usb` | `ptouch-print --image` on local USB |
+| `brother_ql_network` / `brother_ql_usb` | `brother_ql print` over TCP 9100 / USB; the image is rotated and sized to the head for it |
+| `http_bridge` | POST the PNG to a bridge: `bridge_type: ptouch` (ptouch-print bridge) or `niimblue` (niimblue-node) |
+| `print_hub` | POST the PNG to a LAN Print Hub `target`; the hub queues and routes it |
 
-The canvas comes from the printer's `installed_media`, so normally you pass
-nothing. Override with `--media` **only when the user has physically changed the
-roll**, and record it afterwards so the next print is right too:
+## Media
+
+The canvas comes from, in order: `--media`; the printer's live report (bridge/hub tape
+printers report `tapeMm`); the registry's `installed_media`. Override with `--media` only
+when the user physically swapped the roll, then record it:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/labelctl.py" media list
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/labelctl.py" media show DK-11202
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/labelctl.py" registry set-media --id ql-810w --media DK-11202
 ```
 
-Two geometries behave differently and it is worth saying which the user is on:
+- **Continuous** (TZe tape, DK continuous): fixed height, the label grows with the text;
+  `design-label` wraps it to two lines past ~85 mm.
+- **Die-cut** (DK die-cut, NIIMBOT rolls): fixed size; text shrinks to fit.
 
-- **Continuous roll** (`DK-22210`, all TZe) — the label grows to fit the text,
-  capped at 90 mm. You choose the length by choosing the words.
-- **Die-cut** (`DK-11202`, `DK-11201`, the round ones) — the length is fixed by
-  the label itself. Text shrinks to fit; it cannot overflow onto the next one.
-
-An `installed_media` that does not match the physical roll produces a
-*wrong-sized label*, not an error. If a print comes out visibly misaligned,
-suspect that before suspecting the printer.
+A recorded media that doesn't match the physical roll gives a wrong-sized label, not an
+error. Suspect that first when a print comes out misaligned.
 
 ## Judgement
 
-- **Confirm before more than a few copies.** Media is consumable and no Brother
-  label printer reports how much is left. Above 5 copies, say what is about to
-  print and get a yes. The renderer refuses more than 20 outright.
-- **Ask before printing a placeholder.** A heading that is obviously a stand-in,
-  or a QR pointing at `example.com`, is a label that has to be redone. One
-  question is cheaper than one wasted label.
-- **Do not loop this for a batch.** Several different labels is one call each,
-  and that is fine, but tell the user the total first.
-- **Two-line labels need height.** Below roughly 18 mm the second line is
-  dropped rather than rendered illegibly. On 12 mm tape, put everything in
-  `--text`.
-- For a QR label see `qr-labels`; for something printed repeatedly see
-  `label-templates`.
+- **Over 5 copies:** say what is about to print and get a yes. Over 20 is refused.
+- **Placeholders:** a heading that is obviously a stand-in, or a QR to `example.com`, gets one question first.
+- **Batches:** several different labels are one call each; give the total first (`batch-label-run`).
+- **Second lines need height:** below ~14 mm tape `--subtext` is dropped; put both lines in `--text` with `\n`.
+- **Don't auto-retry.** A "failed" job that printed would duplicate the label. Ask first.
 
 ## When it fails
 
-`print` returns the backend's exit code and stderr. Common causes, in the order
-worth checking:
-
 | Symptom | Usually means |
 |---|---|
-| network printer, connection refused | asleep or off the LAN — `discover` reports `raw_port_9100` |
-| USB P-touch not found | auto-powered-off; it cannot be woken over USB, someone must press the button |
-| job accepted, nothing emerges | roll ran out, or the cover is open |
-| `LIBUSB_ERROR_ACCESS` | user not in the `lp` group — see `install-drivers` |
-| `deprecation warning: brother_ql.devicedependent` | noise, not a failure; it appears on successful jobs too |
+| network printer, connection refused | asleep or off the LAN; `discover` reports `raw_port_9100` |
+| USB P-touch not found / bridge health `ok: false` | powered off (it can't be woken over USB), or unplugged |
+| `printed: true`, nothing came out | cover open, roll out, a phone app holding the printer over Bluetooth, or a USB drop; see `printer-troubleshooting` |
+| `LIBUSB_ERROR_ACCESS` | user not in `lp`; see `install-drivers` |
+| hub `state: failed` | the `error` field is the printer-side reason |
 
-`printer-troubleshooting` goes further. Note that a reachable printer says
-nothing about whether it has media — reachability is a TCP connect, and the
-printer has no ink to run out of, so a failed print on a reachable printer is
-almost always the roll or the cover.
+`printer-troubleshooting` goes further; NIIMBOT bridges have their own table in `niimbot-bridge-setup`.
