@@ -37,3 +37,46 @@ labelWidth, labelHeight, quantity, density, threshold, imageFit}`. POST bodies n
   cable before suspecting the printer.
 - A confined (snap) `lsusb` can miss the device; read `/sys/bus/usb/devices/*/idVendor` or the kernel log.
 - Prefer the `/dev/serial/by-id/...` path over `ttyACM0`: it survives replugs and reboots.
+
+## Bridge setup (niimblue-node REST server)
+
+Run on the host the printer is USB-attached to (Node 22):
+
+```bash
+mkdir -p ~/niimblue-node && cd ~/niimblue-node && npm init -y && npm i @mmote/niimblue-node@1.4.1
+```
+
+systemd unit (adjust `User` and paths). The B1 is a CDC serial device owned `root:dialout`; without
+`SupplementaryGroups=dialout` the server starts but `/connect` fails with EACCES.
+
+```ini
+[Unit]
+Description=NIIMBOT label print bridge (niimblue-node REST server)
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=<user>
+SupplementaryGroups=dialout
+WorkingDirectory=/home/<user>/niimblue-node
+ExecStart=/usr/bin/node /home/<user>/niimblue-node/node_modules/@mmote/niimblue-node/cli.mjs server -h 0.0.0.0 -p 9181
+Restart=on-failure
+RestartSec=3
+[Install]
+WantedBy=multi-user.target
+```
+
+`sudo systemctl daemon-reload && sudo systemctl enable --now niimblue-bridge; curl -s localhost:9181/connected`.
+The server has no authentication: keep it on a trusted LAN/tailnet. Update with
+`npm i @mmote/niimblue-node@latest` and a restart.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| Bridge unreachable | `systemctl status niimblue-bridge`; `journalctl -u niimblue-bridge -n 50` |
+| No NIIMBOT found | `ls /dev/serial/by-id/`; no kernel event on plug-in = charge-only cable |
+| `/connect` EACCES | add `SupplementaryGroups=dialout` to the unit |
+| Port busy / stale connection | `curl -X POST -H 'Content-Type: application/json' -d '{}' localhost:9181/disconnect` |
+| Print shifted sideways | re-seat the roll in the guides; then tune `offset_mm` |
+| Faint print | raise density (4-5); prefer filled icons |
+| Wrong size | `GET /rfid` gives barcode and count only; pick the right media yourself |
