@@ -66,6 +66,7 @@ loaded tape. See [No dry run](#no-dry-run).
 | `niimbot-bridge-setup` | Run a niimblue-node bridge for a NIIMBOT printer |
 | `install-drivers` | uv, `brother_ql`, `ptouch-print`, mDNS, CUPS, Python libs |
 | `label-an-asset`, `label-a-storage-unit` | Asset and storage tags *(MCP)* |
+| `ip-address-labels` | Device name + fixed IP labels from a saved device list |
 | `printer-troubleshooting` | Nothing printed: work out why |
 
 `/label` routes to any of them.
